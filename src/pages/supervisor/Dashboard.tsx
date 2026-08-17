@@ -1,0 +1,285 @@
+import { useEffect, useState } from "react";
+import { supabase } from "../../lib/supabase";
+import { useAuth } from "../../contexts/AuthContext";
+import type { AttendanceRecord, Job, Profile } from "../../lib/types";
+
+// Local-timezone "today" as a YYYY-MM-DD date string, matching the
+// Postgres `date` columns (job_date, attendance.date) exactly.
+function todayISO() {
+  const d = new Date();
+  const offset = d.getTimezoneOffset();
+  return new Date(d.getTime() - offset * 60000).toISOString().slice(0, 10);
+}
+
+function initials(name: string) {
+  return name
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase())
+    .join("");
+}
+
+function attendanceLabel(rec: AttendanceRecord | undefined) {
+  if (!rec) return "Not checked in yet";
+  if (rec.status === "present") return "Present";
+  if (rec.status === "late") return "Late";
+  if (rec.status === "absent") return "Absent";
+  return "Week Off";
+}
+
+function attendancePillClass(rec: AttendanceRecord | undefined) {
+  if (!rec) return "bg-gray-200 text-gray-500";
+  if (rec.status === "present" || rec.status === "late") return "bg-blue-100 text-blue-700";
+  if (rec.status === "absent") return "bg-red-100 text-red-700";
+  return "bg-gray-200 text-gray-600";
+}
+
+export default function Dashboard() {
+  const { profile } = useAuth();
+
+  const [roster, setRoster] = useState<Profile[]>([]);
+  const [attendanceToday, setAttendanceToday] = useState<AttendanceRecord[]>([]);
+  const [teamJobsToday, setTeamJobsToday] = useState<Job[]>([]);
+  const [unassignedJobs, setUnassignedJobs] = useState<Job[]>([]);
+  const [openIssueCount, setOpenIssueCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [assigningJobId, setAssigningJobId] = useState<string | null>(null);
+  const [selectedWasherId, setSelectedWasherId] = useState("");
+  const [assignBusy, setAssignBusy] = useState(false);
+
+  useEffect(() => {
+    if (!profile) return;
+    void loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.id, profile?.zone]);
+
+  async function loadAll() {
+    setLoading(true);
+    setError(null);
+    try {
+      const today = todayISO();
+
+      let rosterQuery = supabase.from("profiles").select("*").eq("role", "washer");
+      if (profile?.zone) rosterQuery = rosterQuery.eq("zone", profile.zone);
+      const { data: rosterData, error: rosterErr } = await rosterQuery.order("full_name");
+      if (rosterErr) throw rosterErr;
+      const teamRoster = (rosterData as Profile[]) ?? [];
+      setRoster(teamRoster);
+
+      const washerIds = teamRoster.map((w) => w.id);
+
+      const [attendanceRes, jobsRes, unassignedRes] = await Promise.all([
+        washerIds.length
+          ? supabase.from("attendance").select("*").eq("date", today).in("washer_id", washerIds)
+          : Promise.resolve({ data: [], error: null }),
+        washerIds.length
+          ? supabase.from("jobs").select("*").eq("job_date", today).in("washer_id", washerIds)
+          : Promise.resolve({ data: [], error: null }),
+        supabase.from("jobs").select("*").eq("job_date", today).is("washer_id", null),
+      ]);
+
+      if (attendanceRes.error) throw attendanceRes.error;
+      if (jobsRes.error) throw jobsRes.error;
+      if (unassignedRes.error) throw unassignedRes.error;
+
+      setAttendanceToday((attendanceRes.data as AttendanceRecord[]) ?? []);
+      setTeamJobsToday((jobsRes.data as Job[]) ?? []);
+      setUnassignedJobs((unassignedRes.data as Job[]) ?? []);
+
+      if (washerIds.length) {
+        const { count, error: issueErr } = await supabase
+          .from("issues")
+          .select("id", { count: "exact", head: true })
+          .eq("status", "open")
+          .in("reported_by", washerIds);
+        if (issueErr) throw issueErr;
+        setOpenIssueCount(count ?? 0);
+      } else {
+        setOpenIssueCount(0);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load dashboard data.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function confirmAssign(jobId: string) {
+    if (!selectedWasherId) return;
+    setAssignBusy(true);
+    try {
+      const { error: updateErr } = await supabase
+        .from("jobs")
+        .update({ washer_id: selectedWasherId })
+        .eq("id", jobId);
+      if (updateErr) throw updateErr;
+      setUnassignedJobs((prev) => prev.filter((j) => j.id !== jobId));
+      setAssigningJobId(null);
+      setSelectedWasherId("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to assign job.");
+    } finally {
+      setAssignBusy(false);
+    }
+  }
+
+  const onDutyCount = attendanceToday.filter((a) => a.status === "present" || a.status === "late").length;
+  const absentCount = attendanceToday.filter((a) => a.status === "absent").length;
+  const jobsDoneCount = teamJobsToday.filter((j) => j.status === "done").length;
+  const completionPct = teamJobsToday.length
+    ? Math.round((jobsDoneCount / teamJobsToday.length) * 100)
+    : 0;
+
+  const attendanceByWasher = new Map(attendanceToday.map((a) => [a.washer_id, a]));
+
+  if (loading) {
+    return <p className="text-gray-400 text-sm">Loading dashboard…</p>;
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-3">
+        <div className="h-14 w-14 rounded-full bg-blue-600 text-white flex items-center justify-center font-extrabold text-lg flex-shrink-0">
+          {initials(profile?.full_name ?? "")}
+        </div>
+        <div>
+          <p className="text-sm text-gray-500">Good morning</p>
+          <h1 className="text-2xl font-extrabold text-gray-900">
+            {profile?.full_name}
+            {profile?.zone ? <span className="text-gray-900"> · {profile.zone}</span> : null}
+          </h1>
+        </div>
+      </div>
+
+      {error && <p className="text-sm text-red-600 bg-red-50 rounded-2xl px-4 py-3">{error}</p>}
+
+      <div className="grid grid-cols-3 gap-3">
+        <div className="bg-gray-100 rounded-2xl py-5 text-center">
+          <p className="text-3xl font-extrabold text-blue-600">{onDutyCount}</p>
+          <p className="text-xs text-gray-500 mt-1">On Duty</p>
+        </div>
+        <div className="bg-gray-100 rounded-2xl py-5 text-center">
+          <p className="text-3xl font-extrabold text-gray-900">{absentCount}</p>
+          <p className="text-xs text-gray-500 mt-1">Absent</p>
+        </div>
+        <div className="bg-gray-100 rounded-2xl py-5 text-center">
+          <p className="text-3xl font-extrabold text-gray-900">{jobsDoneCount}</p>
+          <p className="text-xs text-gray-500 mt-1">Jobs Done</p>
+        </div>
+      </div>
+
+      <div className="bg-gray-100 rounded-2xl p-5">
+        <p className="text-xs font-bold text-blue-600 tracking-wide mb-4">TODAY'S KPIS</p>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <p className="text-2xl font-extrabold text-gray-900">{completionPct}%</p>
+            <p className="text-xs text-gray-500 mt-1">Completion</p>
+          </div>
+          <div>
+            <p className="text-2xl font-extrabold text-gray-900">{openIssueCount}</p>
+            <p className="text-xs text-gray-500 mt-1">Open Issues</p>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <h2 className="text-sm font-extrabold text-gray-900 tracking-wide mb-3">
+          JOB QUEUE · UNASSIGNED
+        </h2>
+        {unassignedJobs.length === 0 ? (
+          <p className="text-sm text-gray-400 bg-gray-100 rounded-2xl px-4 py-4">
+            No unassigned jobs today.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {unassignedJobs.map((job) => (
+              <div key={job.id} className="bg-gray-100 rounded-2xl px-4 py-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="font-extrabold text-gray-900">
+                      {job.vehicle_make} · {job.vehicle_reg}
+                    </p>
+                    <p className="text-sm text-gray-500 mt-0.5">
+                      {job.area} · {job.scheduled_time}
+                    </p>
+                  </div>
+                  {assigningJobId !== job.id && (
+                    <button
+                      onClick={() => {
+                        setAssigningJobId(job.id);
+                        setSelectedWasherId("");
+                      }}
+                      className="flex-shrink-0 rounded-full border border-gray-300 px-4 py-2 text-sm font-bold text-gray-900"
+                    >
+                      Assign
+                    </button>
+                  )}
+                </div>
+                {assigningJobId === job.id && (
+                  <div className="mt-3 flex items-center gap-2">
+                    <select
+                      value={selectedWasherId}
+                      onChange={(e) => setSelectedWasherId(e.target.value)}
+                      className="flex-1 rounded-xl border border-gray-300 px-3 py-2 text-sm bg-white"
+                    >
+                      <option value="">Select washer…</option>
+                      {roster.map((w) => (
+                        <option key={w.id} value={w.id}>
+                          {w.full_name}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => confirmAssign(job.id)}
+                      disabled={!selectedWasherId || assignBusy}
+                      className="rounded-full bg-blue-600 disabled:opacity-50 text-white px-4 py-2 text-sm font-bold"
+                    >
+                      Confirm
+                    </button>
+                    <button
+                      onClick={() => setAssigningJobId(null)}
+                      className="text-sm text-gray-500 font-medium px-2"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <h2 className="text-sm font-extrabold text-gray-900 tracking-wide mb-3">TEAM STATUS</h2>
+        {roster.length === 0 ? (
+          <p className="text-sm text-gray-400 bg-gray-100 rounded-2xl px-4 py-4">
+            No washers found{profile?.zone ? ` in ${profile.zone}` : ""}.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {roster.map((w) => {
+              const rec = attendanceByWasher.get(w.id);
+              return (
+                <div
+                  key={w.id}
+                  className="bg-gray-100 rounded-2xl px-4 py-3 flex items-center justify-between"
+                >
+                  <p className="font-bold text-gray-900">{w.full_name}</p>
+                  <span
+                    className={`text-xs font-bold px-3 py-1.5 rounded-full ${attendancePillClass(rec)}`}
+                  >
+                    {attendanceLabel(rec)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
