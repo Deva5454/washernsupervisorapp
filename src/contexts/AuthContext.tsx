@@ -21,7 +21,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 // real deployment to require normal per-user sign-in.
 const DEMO_EMAIL = import.meta.env.VITE_DEMO_EMAIL;
 const DEMO_PASSWORD = import.meta.env.VITE_DEMO_PASSWORD;
-const DEMO_MODE = !!(DEMO_EMAIL && DEMO_PASSWORD);
+export const DEMO_MODE = !!(DEMO_EMAIL && DEMO_PASSWORD);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
