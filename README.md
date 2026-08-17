@@ -4,6 +4,7 @@ Standalone mobile web app for car washers and supervisors, built with
 Vite + React + TypeScript + Tailwind CSS, backed by Supabase (Postgres +
 Auth), deployed on Vercel.
 
+
 ## Setup
 
 1. **Supabase**
