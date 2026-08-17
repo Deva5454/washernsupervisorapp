@@ -1,7 +1,8 @@
 import { type ReactNode } from "react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
 import { Bell, Home, CalendarDays, Wallet, Package, MoreHorizontal, LayoutGrid, ClipboardCheck, AlertTriangle, TrendingUp } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
+import type { Role } from "../../lib/types";
 
 interface NavItem {
   to: string;
@@ -26,18 +27,45 @@ const supervisorNav: NavItem[] = [
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const { profile } = useAuth();
-  const nav = profile?.role === "supervisor" ? supervisorNav : washerNav;
+  const { role, switchRole } = useAuth();
+  const navigate = useNavigate();
+  const nav = role === "supervisor" ? supervisorNav : washerNav;
+
+  function selectRole(next: Role) {
+    if (next === role) return;
+    switchRole(next);
+    navigate(next === "supervisor" ? "/supervisor" : "/washer");
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Top bar */}
       <div className="bg-gray-900 text-white px-4 pt-5 pb-4">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between mb-4">
           <h1 className="text-xl font-extrabold">
             CleanCar<span className="text-blue-500">.</span>
           </h1>
           <Bell className="h-5 w-5 text-white/80" />
+        </div>
+
+        {/* Role toggle — a local view switch, not a login */}
+        <div className="flex rounded-full border border-white/20 p-1">
+          <button
+            onClick={() => selectRole("washer")}
+            className={`flex-1 rounded-full py-1.5 text-sm font-bold transition-colors ${
+              role === "washer" ? "bg-blue-600 text-white" : "text-white/70"
+            }`}
+          >
+            Car Washer
+          </button>
+          <button
+            onClick={() => selectRole("supervisor")}
+            className={`flex-1 rounded-full py-1.5 text-sm font-bold transition-colors ${
+              role === "supervisor" ? "bg-blue-600 text-white" : "text-white/70"
+            }`}
+          >
+            Supervisor
+          </button>
         </div>
       </div>
 
