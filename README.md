@@ -38,6 +38,25 @@ Auth), deployed on Vercel.
      Project Settings → Environment Variables.
    - Deploy.
 
+## Demo mode (skip the login screen)
+
+By default every visitor has to sign in — that's what lets the app tell
+washers/supervisors apart and keep their data separate. If you just want
+to show the app off from one shared account with no login step, set two
+more environment variables (locally in `.env.local`, or in Vercel under
+Project Settings → Environment Variables):
+
+```
+VITE_DEMO_EMAIL=demo@cleancar.app
+VITE_DEMO_PASSWORD=<a password you choose>
+```
+
+Then create a Supabase user with that exact email/password
+(Authentication → Users → Add User) — the app signs in as that account
+automatically on load. Leave both variables unset (the default) for real
+multi-user staff use, since a demo account gives every visitor the same
+identity and the same data.
+
 ## Data model
 
 See `supabase_schema.sql` for the full schema. In short: `profiles` (one
