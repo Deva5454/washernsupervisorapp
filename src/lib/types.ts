@@ -47,6 +47,7 @@ export interface Job {
   payment_method: PaymentMethod | null;
   payment_reference: string | null;
   payment_collected_at: string | null;
+  override_reason: string | null;
   job_date: string;
   created_at: string;
   updated_at: string;
@@ -102,7 +103,12 @@ export interface Payout {
 }
 
 export type IssueStatus = "open" | "resolved";
-export type IssueCategory = "broken_part" | "lost_damaged_bottle" | "repair_request" | "other";
+export type IssueCategory =
+  | "broken_part"
+  | "lost_damaged_bottle"
+  | "repair_request"
+  | "pre_damage"
+  | "other";
 
 export interface Issue {
   id: string;
@@ -111,6 +117,8 @@ export interface Issue {
   status: IssueStatus;
   category: IssueCategory | null;
   item_name: string | null;
+  job_id: string | null;
+  photo_url: string | null;
   created_at: string;
   resolved_at: string | null;
 }
@@ -152,4 +160,58 @@ export interface ClothUnit {
   wash_count: number;
   created_at: string;
   updated_at: string;
+}
+
+export type SosStatus = "active" | "resolved";
+
+export interface SosAlert {
+  id: string;
+  washer_id: string;
+  gps_lat: number | null;
+  gps_lng: number | null;
+  message: string | null;
+  status: SosStatus;
+  created_at: string;
+  resolved_at: string | null;
+  resolved_by: string | null;
+}
+
+export interface Notification {
+  id: string;
+  profile_id: string;
+  title: string;
+  body: string | null;
+  created_at: string;
+  read_at: string | null;
+}
+
+export type RequestStatus = "pending" | "approved" | "rejected";
+
+export interface AdvanceRequest {
+  id: string;
+  washer_id: string;
+  amount: number;
+  reason: string | null;
+  status: RequestStatus;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export interface CoverRequest {
+  id: string;
+  washer_id: string;
+  cover_date: string;
+  reason: string | null;
+  status: RequestStatus;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export interface CashDeposit {
+  id: string;
+  washer_id: string;
+  amount: number;
+  deposit_date: string;
+  deposited_at: string;
+  recorded_by: string | null;
 }

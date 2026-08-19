@@ -25,6 +25,10 @@
 --   - supabase_washer_ops_migration.sql (had v5, missing vehicle_type /
 --     payment_* on jobs, gps_unlock_approved_at on attendance, and the
 --     cloth_units table)
+--   - supabase_gaps_migration.sql (had v6, missing issues.job_id /
+--     photo_url / pre_damage category, jobs.override_reason, and the
+--     sos_alerts / notifications / advance_requests / cover_requests /
+--     cash_deposits tables)
 -- ============================================================
 
 create extension if not exists "pgcrypto";
@@ -79,6 +83,9 @@ create table if not exists jobs (
   payment_method text check (payment_method in ('cash', 'upi', 'link')),
   payment_reference text,
   payment_collected_at timestamptz,
+  -- Latest reassignment reason, not a history — matches this app's
+  -- existing "no audit trail" approach to overrides.
+  override_reason text,
   job_date date not null default current_date,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
@@ -144,11 +151,15 @@ create table if not exists issues (
   reported_by uuid not null references profiles(id) on delete cascade,
   title text not null,
   status text not null default 'open' check (status in ('open', 'resolved')),
-  -- category/item_name are optional structure for supervisor-filed
-  -- incident reports (broken part, lost/damaged bottle, repair request);
-  -- null for the plain free-text issues washers already report.
-  category text check (category is null or category in ('broken_part', 'lost_damaged_bottle', 'repair_request', 'other')),
+  -- category/item_name are optional structure for structured incident
+  -- reports (broken part, lost/damaged bottle, repair request, pre-wash
+  -- damage); null for the plain free-text issues either role can report.
+  category text check (category is null or category in ('broken_part', 'lost_damaged_bottle', 'repair_request', 'pre_damage', 'other')),
   item_name text,
+  -- Set when a report is about a specific job (pre-damage reports
+  -- always are; general incidents usually aren't).
+  job_id uuid references jobs(id) on delete set null,
+  photo_url text,
   created_at timestamptz default now(),
   resolved_at timestamptz
 );
@@ -194,6 +205,70 @@ create table if not exists cloth_units (
   updated_at timestamptz default now()
 );
 
+-- A washer's own SOS/emergency alert, with their GPS fix at the moment
+-- they sent it.
+create table if not exists sos_alerts (
+  id uuid primary key default gen_random_uuid(),
+  washer_id uuid not null references profiles(id) on delete cascade,
+  gps_lat double precision,
+  gps_lng double precision,
+  message text,
+  status text not null default 'active' check (status in ('active', 'resolved')),
+  created_at timestamptz default now(),
+  resolved_at timestamptz,
+  resolved_by uuid references profiles(id)
+);
+
+-- In-app notifications, written at real state-change moments (job
+-- assigned, check-in unlocked, report resolved, SOS acknowledged) — not
+-- a generic pub/sub system, just the specific events this app raises.
+create table if not exists notifications (
+  id uuid primary key default gen_random_uuid(),
+  profile_id uuid not null references profiles(id) on delete cascade,
+  title text not null,
+  body text,
+  created_at timestamptz default now(),
+  read_at timestamptz
+);
+
+create table if not exists advance_requests (
+  id uuid primary key default gen_random_uuid(),
+  washer_id uuid not null references profiles(id) on delete cascade,
+  amount numeric not null,
+  reason text,
+  status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
+  created_at timestamptz default now(),
+  resolved_at timestamptz
+);
+
+-- A washer requesting cover for a future date (e.g. a planned week off)
+-- — distinct from the supervisor-initiated same-day cover redistribution
+-- for an unexpected absence. Approving this is an acknowledgment; the
+-- supervisor still assigns that day's jobs via the normal Job Queue once
+-- the date arrives (job assignment only exists for today's jobs).
+create table if not exists cover_requests (
+  id uuid primary key default gen_random_uuid(),
+  washer_id uuid not null references profiles(id) on delete cascade,
+  cover_date date not null,
+  reason text,
+  status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
+  created_at timestamptz default now(),
+  resolved_at timestamptz
+);
+
+-- Reconciliation for doorstep cash collected (jobs.payment_method =
+-- 'cash'): a supervisor marks a washer's collected cash as deposited.
+-- "Pending" for a washer/day is derived (sum of collected cash minus
+-- sum of deposits), not stored as its own flag.
+create table if not exists cash_deposits (
+  id uuid primary key default gen_random_uuid(),
+  washer_id uuid not null references profiles(id) on delete cascade,
+  amount numeric not null,
+  deposit_date date not null default current_date,
+  deposited_at timestamptz default now(),
+  recorded_by uuid references profiles(id)
+);
+
 -- ── Row Level Security — open to the anon key ───────────────────
 -- No login means no auth.uid() to scope by, so every policy here is a
 -- flat "yes" for anyone holding the anon key. See the file header for
@@ -210,6 +285,11 @@ alter table alerts enable row level security;
 alter table job_photos enable row level security;
 alter table cloth_exchanges enable row level security;
 alter table cloth_units enable row level security;
+alter table sos_alerts enable row level security;
+alter table notifications enable row level security;
+alter table advance_requests enable row level security;
+alter table cover_requests enable row level security;
+alter table cash_deposits enable row level security;
 
 create policy "anon_all_profiles"   on profiles      for all to anon using (true) with check (true);
 create policy "anon_all_jobs"       on jobs          for all to anon using (true) with check (true);
@@ -222,6 +302,11 @@ create policy "anon_all_alerts"     on alerts         for all to anon using (tru
 create policy "anon_all_job_photos" on job_photos     for all to anon using (true) with check (true);
 create policy "anon_all_cloth_exchanges" on cloth_exchanges for all to anon using (true) with check (true);
 create policy "anon_all_cloth_units" on cloth_units for all to anon using (true) with check (true);
+create policy "anon_all_sos_alerts" on sos_alerts for all to anon using (true) with check (true);
+create policy "anon_all_notifications" on notifications for all to anon using (true) with check (true);
+create policy "anon_all_advance_requests" on advance_requests for all to anon using (true) with check (true);
+create policy "anon_all_cover_requests" on cover_requests for all to anon using (true) with check (true);
+create policy "anon_all_cash_deposits" on cash_deposits for all to anon using (true) with check (true);
 
 -- Storage: a public bucket for check-in selfies + job proof-of-work photos.
 insert into storage.buckets (id, name, public)
@@ -243,6 +328,11 @@ create index if not exists idx_job_photos_job on job_photos(job_id);
 create index if not exists idx_cloth_exchanges_washer on cloth_exchanges(washer_id, created_at desc);
 create index if not exists idx_cloth_units_washer on cloth_units(washer_id);
 create index if not exists idx_cloth_units_barcode on cloth_units(barcode);
+create index if not exists idx_sos_alerts_status on sos_alerts(status, created_at desc);
+create index if not exists idx_notifications_profile on notifications(profile_id, created_at desc);
+create index if not exists idx_advance_requests_washer on advance_requests(washer_id, created_at desc);
+create index if not exists idx_cover_requests_washer on cover_requests(washer_id, created_at desc);
+create index if not exists idx_cash_deposits_washer_date on cash_deposits(washer_id, deposit_date);
 
 -- ── Seed the two people the app needs to show something real ───
 -- Same names as the reference prototype. Safe to run more than once.
@@ -254,8 +344,11 @@ insert into profiles (full_name, role, zone)
 select 'Priya Sharma', 'supervisor', 'Zone 4'
 where not exists (select 1 from profiles where full_name = 'Priya Sharma');
 
--- Done: 11 tables, 11 RLS policies, 1 storage bucket, 9 indexes, 2 seeded profiles.
+-- Done: 16 tables, 16 RLS policies, 1 storage bucket, 14 indexes, 2 seeded profiles.
 -- (issues.category / issues.item_name added for supervisor incident reports.
 --  jobs.vehicle_type / payment_* , attendance.gps_unlock_approved_at, and
 --  cloth_units added for washer-side weighted units / payments / cloth
---  tracking / GPS-lockout unlock.)
+--  tracking / GPS-lockout unlock. issues.job_id / photo_url / pre_damage
+--  category, jobs.override_reason, and sos_alerts / notifications /
+--  advance_requests / cover_requests / cash_deposits round out the
+--  remaining washer+supervisor feature gaps.)

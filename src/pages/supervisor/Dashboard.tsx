@@ -2,8 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import { Phone } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
+import { notify } from "../../lib/notify";
 import { CheckInPanel } from "../../components/CheckInPanel";
-import type { AttendanceRecord, AttendanceStatus, Job, Profile } from "../../lib/types";
+import type { AttendanceRecord, AttendanceStatus, CashDeposit, Job, Profile } from "../../lib/types";
+
+function todayCashCollected(jobs: Job[], washerId: string) {
+  return jobs
+    .filter((j) => j.washer_id === washerId && j.payment_method === "cash" && j.payment_collected_at)
+    .reduce((sum, j) => sum + Number(j.payment_amount ?? 0), 0);
+}
 
 // Local-timezone "today" as a YYYY-MM-DD date string, matching the
 // Postgres `date` columns (job_date, attendance.date) exactly.
@@ -56,6 +63,11 @@ export default function Dashboard() {
   const [editingAttendanceId, setEditingAttendanceId] = useState<string | null>(null);
   const [attendanceBusyId, setAttendanceBusyId] = useState<string | null>(null);
   const [unlockBusyId, setUnlockBusyId] = useState<string | null>(null);
+  const [forceCheckoutBusyId, setForceCheckoutBusyId] = useState<string | null>(null);
+  const [overrideReason, setOverrideReason] = useState("");
+
+  const [cashDepositsToday, setCashDepositsToday] = useState<CashDeposit[]>([]);
+  const [depositBusyId, setDepositBusyId] = useState<string | null>(null);
 
   // Cover redistribution: when a washer is marked absent, their
   // undone jobs today can be handed to on-duty teammates in one panel
@@ -104,15 +116,21 @@ export default function Dashboard() {
       setUnassignedJobs((unassignedRes.data as Job[]) ?? []);
 
       if (washerIds.length) {
-        const { count, error: issueErr } = await supabase
-          .from("issues")
-          .select("id", { count: "exact", head: true })
-          .eq("status", "open")
-          .in("reported_by", washerIds);
-        if (issueErr) throw issueErr;
-        setOpenIssueCount(count ?? 0);
+        const [issueRes, depositRes] = await Promise.all([
+          supabase
+            .from("issues")
+            .select("id", { count: "exact", head: true })
+            .eq("status", "open")
+            .in("reported_by", washerIds),
+          supabase.from("cash_deposits").select("*").eq("deposit_date", today).in("washer_id", washerIds),
+        ]);
+        if (issueRes.error) throw issueRes.error;
+        if (depositRes.error) throw depositRes.error;
+        setOpenIssueCount(issueRes.count ?? 0);
+        setCashDepositsToday((depositRes.data as CashDeposit[]) ?? []);
       } else {
         setOpenIssueCount(0);
+        setCashDepositsToday([]);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load dashboard data.");
@@ -128,13 +146,22 @@ export default function Dashboard() {
     if (!selectedWasherId) return;
     setAssignBusy(true);
     try {
+      const job = allJobsToday.find((j) => j.id === jobId);
       const { error: updateErr } = await supabase
         .from("jobs")
-        .update({ washer_id: selectedWasherId })
+        .update({ washer_id: selectedWasherId, override_reason: overrideReason.trim() || null })
         .eq("id", jobId);
       if (updateErr) throw updateErr;
+      if (job) {
+        await notify(
+          selectedWasherId,
+          "New job assigned",
+          `${job.vehicle_make} · ${job.vehicle_reg} at ${job.scheduled_time}`
+        );
+      }
       setAssigningJobId(null);
       setSelectedWasherId("");
+      setOverrideReason("");
       await loadAll();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to assign job.");
@@ -176,7 +203,7 @@ export default function Dashboard() {
     return allJobsToday.filter((j) => j.washer_id === washerId && j.status !== "done");
   }
 
-  async function unlockCheckIn(attendanceId: string) {
+  async function unlockCheckIn(washerId: string, attendanceId: string) {
     setUnlockBusyId(attendanceId);
     setError(null);
     try {
@@ -185,11 +212,49 @@ export default function Dashboard() {
         .update({ gps_unlock_approved_at: new Date().toISOString() })
         .eq("id", attendanceId);
       if (updateErr) throw updateErr;
+      await notify(washerId, "Check-in unlocked", "Your supervisor has unlocked check-in — you can check in again.");
       await loadAll();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to unlock check-in.");
     } finally {
       setUnlockBusyId(null);
+    }
+  }
+
+  async function forceCheckout(washerId: string, attendanceId: string) {
+    setForceCheckoutBusyId(attendanceId);
+    setError(null);
+    try {
+      const { error: updateErr } = await supabase
+        .from("attendance")
+        .update({ check_out_time: new Date().toISOString() })
+        .eq("id", attendanceId);
+      if (updateErr) throw updateErr;
+      await notify(washerId, "Checked out by supervisor", "Your supervisor checked you out for the day.");
+      await loadAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to check out this washer.");
+    } finally {
+      setForceCheckoutBusyId(null);
+    }
+  }
+
+  async function markCashDeposited(washerId: string, amount: number) {
+    setDepositBusyId(washerId);
+    setError(null);
+    try {
+      if (!profile) return;
+      const { error: insertErr } = await supabase.from("cash_deposits").insert({
+        washer_id: washerId,
+        amount,
+        recorded_by: profile.id,
+      });
+      if (insertErr) throw insertErr;
+      await loadAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to record deposit.");
+    } finally {
+      setDepositBusyId(null);
     }
   }
 
@@ -220,6 +285,13 @@ export default function Dashboard() {
       );
       const failed = results.find((r) => r.error);
       if (failed?.error) throw failed.error;
+      const byWasher = new Map<string, number>();
+      for (const [, washerId] of entries) byWasher.set(washerId, (byWasher.get(washerId) ?? 0) + 1);
+      await Promise.all(
+        Array.from(byWasher.entries()).map(([washerId, count]) =>
+          notify(washerId, "Cover job assigned", `${count} job${count === 1 ? "" : "s"} added to your schedule today.`)
+        )
+      );
       setCoverWasherId(null);
       setCoverAssignments({});
       await loadAll();
@@ -303,6 +375,48 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {(() => {
+        const depositedByWasher = new Map<string, number>();
+        for (const d of cashDepositsToday) {
+          depositedByWasher.set(d.washer_id, (depositedByWasher.get(d.washer_id) ?? 0) + Number(d.amount));
+        }
+        const rows = roster
+          .map((w) => {
+            const collected = todayCashCollected(teamJobsToday, w.id);
+            const deposited = depositedByWasher.get(w.id) ?? 0;
+            return { washer: w, pending: collected - deposited };
+          })
+          .filter((r) => r.pending > 0);
+        if (!rows.length) return null;
+        return (
+          <div>
+            <h2 className="text-sm font-extrabold text-gray-900 tracking-wide mb-3">
+              CASH COLLECTION · PENDING DEPOSIT
+            </h2>
+            <div className="space-y-2">
+              {rows.map(({ washer, pending }) => (
+                <div
+                  key={washer.id}
+                  className="bg-gray-100 rounded-2xl px-4 py-3 flex items-center justify-between gap-3"
+                >
+                  <div>
+                    <p className="font-bold text-gray-900">{washer.full_name}</p>
+                    <p className="text-sm text-gray-500">₹{pending.toLocaleString("en-IN")} pending</p>
+                  </div>
+                  <button
+                    onClick={() => markCashDeposited(washer.id, pending)}
+                    disabled={depositBusyId === washer.id}
+                    className="flex-shrink-0 rounded-full bg-blue-600 disabled:opacity-50 text-white text-sm font-bold px-4 py-2"
+                  >
+                    {depositBusyId === washer.id ? "Saving…" : "Mark Deposited"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
       <div>
         <h2 className="text-sm font-extrabold text-gray-900 tracking-wide mb-3">
           JOB QUEUE · TODAY
@@ -346,32 +460,44 @@ export default function Dashboard() {
                     )}
                   </div>
                   {assigningJobId === job.id && (
-                    <div className="mt-3 flex items-center gap-2">
-                      <select
-                        value={selectedWasherId}
-                        onChange={(e) => setSelectedWasherId(e.target.value)}
-                        className="flex-1 rounded-xl border border-gray-300 px-3 py-2 text-sm bg-white"
-                      >
-                        <option value="">Select washer…</option>
-                        {roster.map((w) => (
-                          <option key={w.id} value={w.id}>
-                            {w.full_name}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        onClick={() => confirmAssign(job.id)}
-                        disabled={!selectedWasherId || assignBusy}
-                        className="rounded-full bg-blue-600 disabled:opacity-50 text-white px-4 py-2 text-sm font-bold"
-                      >
-                        Confirm
-                      </button>
-                      <button
-                        onClick={() => setAssigningJobId(null)}
-                        className="text-sm text-gray-500 font-medium px-2"
-                      >
-                        Cancel
-                      </button>
+                    <div className="mt-3 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={selectedWasherId}
+                          onChange={(e) => setSelectedWasherId(e.target.value)}
+                          className="flex-1 rounded-xl border border-gray-300 px-3 py-2 text-sm bg-white"
+                        >
+                          <option value="">Select washer…</option>
+                          {roster.map((w) => (
+                            <option key={w.id} value={w.id}>
+                              {w.full_name}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => confirmAssign(job.id)}
+                          disabled={!selectedWasherId || assignBusy}
+                          className="rounded-full bg-blue-600 disabled:opacity-50 text-white px-4 py-2 text-sm font-bold"
+                        >
+                          Confirm
+                        </button>
+                        <button
+                          onClick={() => {
+                            setAssigningJobId(null);
+                            setOverrideReason("");
+                          }}
+                          className="text-sm text-gray-500 font-medium px-2"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                      <input
+                        type="text"
+                        value={overrideReason}
+                        onChange={(e) => setOverrideReason(e.target.value)}
+                        placeholder="Reason (optional)"
+                        className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm bg-white"
+                      />
                     </div>
                   )}
                 </div>
@@ -394,6 +520,11 @@ export default function Dashboard() {
               const uncoveredJobs = jobsNeedingCover(w.id);
               const isAbsent = rec?.status === "absent";
               const isGpsLocked = !!rec?.gps_lost_at && !rec?.gps_unlock_approved_at;
+              const isCheckedIn =
+                rec &&
+                (rec.status === "present" || rec.status === "late") &&
+                !rec.gps_lost_at &&
+                !rec.check_out_time;
               return (
                 <div key={w.id} className="bg-gray-100 rounded-2xl px-4 py-3">
                   <div className="flex items-center justify-between gap-2">
@@ -437,11 +568,20 @@ export default function Dashboard() {
                   </div>
                   {isGpsLocked && rec && (
                     <button
-                      onClick={() => unlockCheckIn(rec.id)}
+                      onClick={() => unlockCheckIn(w.id, rec.id)}
                       disabled={unlockBusyId === rec.id}
                       className="mt-2 w-full rounded-xl bg-red-50 border border-red-300 text-red-600 disabled:opacity-50 text-xs font-bold py-2"
                     >
                       {unlockBusyId === rec.id ? "Unlocking…" : "GPS lost — Unlock Check-In"}
+                    </button>
+                  )}
+                  {isCheckedIn && rec && (
+                    <button
+                      onClick={() => forceCheckout(w.id, rec.id)}
+                      disabled={forceCheckoutBusyId === rec.id}
+                      className="mt-2 w-full rounded-xl border border-gray-300 text-gray-700 disabled:opacity-50 text-xs font-bold py-2"
+                    >
+                      {forceCheckoutBusyId === rec.id ? "Checking out…" : "Force Checkout"}
                     </button>
                   )}
                   {isAbsent && uncoveredJobs.length > 0 && (

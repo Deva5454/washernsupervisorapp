@@ -1,13 +1,23 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { AlertTriangle, Wrench } from "lucide-react";
+import { AlertTriangle, Siren, Wrench } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
-import type { Alert, Issue, IssueCategory, Profile } from "../../lib/types";
+import { notify } from "../../lib/notify";
+import type {
+  AdvanceRequest,
+  Alert,
+  CoverRequest,
+  Issue,
+  IssueCategory,
+  Profile,
+  SosAlert,
+} from "../../lib/types";
 
 const CATEGORY_LABEL: Record<IssueCategory, string> = {
   broken_part: "Broken Part",
   lost_damaged_bottle: "Lost/Damaged Bottle",
   repair_request: "Repair Request",
+  pre_damage: "Pre-Existing Damage",
   other: "Other",
 };
 
@@ -17,6 +27,10 @@ export default function Alerts() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [issues, setIssues] = useState<Issue[]>([]);
   const [reporters, setReporters] = useState<Map<string, Profile>>(new Map());
+  const [sosAlerts, setSosAlerts] = useState<SosAlert[]>([]);
+  const [advanceRequests, setAdvanceRequests] = useState<AdvanceRequest[]>([]);
+  const [coverRequests, setCoverRequests] = useState<CoverRequest[]>([]);
+  const [requesters, setRequesters] = useState<Map<string, Profile>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -38,29 +52,59 @@ export default function Alerts() {
     try {
       let alertQuery = supabase.from("alerts").select("*").order("created_at", { ascending: false });
       if (profile?.zone) alertQuery = alertQuery.eq("zone", profile.zone);
-      const { data: alertData, error: alertErr } = await alertQuery;
-      if (alertErr) throw alertErr;
-      setAlerts((alertData as Alert[]) ?? []);
 
-      const { data: issueData, error: issueErr } = await supabase
-        .from("issues")
-        .select("*")
-        .eq("status", "open")
-        .order("created_at", { ascending: false });
-      if (issueErr) throw issueErr;
-      const openIssues = (issueData as Issue[]) ?? [];
+      const [alertRes, issueRes, sosRes, advanceRes, coverRes] = await Promise.all([
+        alertQuery,
+        supabase.from("issues").select("*").eq("status", "open").order("created_at", { ascending: false }),
+        supabase.from("sos_alerts").select("*").eq("status", "active").order("created_at", { ascending: false }),
+        supabase
+          .from("advance_requests")
+          .select("*")
+          .eq("status", "pending")
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("cover_requests")
+          .select("*")
+          .eq("status", "pending")
+          .order("cover_date", { ascending: true }),
+      ]);
+      if (alertRes.error) throw alertRes.error;
+      if (issueRes.error) throw issueRes.error;
+      if (sosRes.error) throw sosRes.error;
+      if (advanceRes.error) throw advanceRes.error;
+      if (coverRes.error) throw coverRes.error;
+
+      const openIssues = (issueRes.data as Issue[]) ?? [];
+      const activeSos = (sosRes.data as SosAlert[]) ?? [];
+      const pendingAdvances = (advanceRes.data as AdvanceRequest[]) ?? [];
+      const pendingCovers = (coverRes.data as CoverRequest[]) ?? [];
+
+      setAlerts((alertRes.data as Alert[]) ?? []);
       setIssues(openIssues);
+      setSosAlerts(activeSos);
+      setAdvanceRequests(pendingAdvances);
+      setCoverRequests(pendingCovers);
 
-      const reporterIds = [...new Set(openIssues.map((i) => i.reported_by))];
-      if (reporterIds.length) {
+      const peopleIds = [
+        ...new Set([
+          ...openIssues.map((i) => i.reported_by),
+          ...activeSos.map((s) => s.washer_id),
+          ...pendingAdvances.map((a) => a.washer_id),
+          ...pendingCovers.map((c) => c.washer_id),
+        ]),
+      ];
+      if (peopleIds.length) {
         const { data: profileData, error: profileErr } = await supabase
           .from("profiles")
           .select("*")
-          .in("id", reporterIds);
+          .in("id", peopleIds);
         if (profileErr) throw profileErr;
-        setReporters(new Map(((profileData as Profile[]) ?? []).map((p) => [p.id, p])));
+        const map = new Map(((profileData as Profile[]) ?? []).map((p) => [p.id, p]));
+        setReporters(map);
+        setRequesters(map);
       } else {
         setReporters(new Map());
+        setRequesters(new Map());
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load alerts.");
@@ -72,14 +116,76 @@ export default function Alerts() {
   async function markResolved(id: string) {
     setBusyId(id);
     try {
+      const issue = issues.find((i) => i.id === id);
       const { error: updateErr } = await supabase
         .from("issues")
         .update({ status: "resolved", resolved_at: new Date().toISOString() })
         .eq("id", id);
       if (updateErr) throw updateErr;
+      if (issue) await notify(issue.reported_by, "Your report was resolved", issue.title);
       setIssues((prev) => prev.filter((i) => i.id !== id));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to resolve issue.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function resolveSos(alert: SosAlert) {
+    if (!profile) return;
+    setBusyId(alert.id);
+    try {
+      const { error: updateErr } = await supabase
+        .from("sos_alerts")
+        .update({ status: "resolved", resolved_at: new Date().toISOString(), resolved_by: profile.id })
+        .eq("id", alert.id);
+      if (updateErr) throw updateErr;
+      await notify(alert.washer_id, "SOS acknowledged", "Your supervisor has acknowledged your SOS alert.");
+      setSosAlerts((prev) => prev.filter((s) => s.id !== alert.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to resolve SOS alert.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function resolveAdvance(req: AdvanceRequest, status: "approved" | "rejected") {
+    setBusyId(req.id);
+    try {
+      const { error: updateErr } = await supabase
+        .from("advance_requests")
+        .update({ status, resolved_at: new Date().toISOString() })
+        .eq("id", req.id);
+      if (updateErr) throw updateErr;
+      await notify(
+        req.washer_id,
+        `Advance request ${status}`,
+        `Your request for ₹${req.amount.toLocaleString("en-IN")} was ${status}.`
+      );
+      setAdvanceRequests((prev) => prev.filter((r) => r.id !== req.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update advance request.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function resolveCover(req: CoverRequest, status: "approved" | "rejected") {
+    setBusyId(req.id);
+    try {
+      const { error: updateErr } = await supabase
+        .from("cover_requests")
+        .update({ status, resolved_at: new Date().toISOString() })
+        .eq("id", req.id);
+      if (updateErr) throw updateErr;
+      await notify(
+        req.washer_id,
+        `Cover request ${status}`,
+        `Your cover request for ${req.cover_date} was ${status}.`
+      );
+      setCoverRequests((prev) => prev.filter((r) => r.id !== req.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update cover request.");
     } finally {
       setBusyId(null);
     }
@@ -115,6 +221,51 @@ export default function Alerts() {
       <h1 className="text-2xl font-extrabold text-gray-900">Alert Center</h1>
 
       {error && <p className="text-sm text-red-600 bg-red-50 rounded-2xl px-4 py-3">{error}</p>}
+
+      {sosAlerts.length > 0 && (
+        <div className="space-y-2">
+          {sosAlerts.map((sos) => {
+            const washer = reporters.get(sos.washer_id);
+            const mapsUrl =
+              sos.gps_lat != null && sos.gps_lng != null
+                ? `https://www.google.com/maps?q=${sos.gps_lat},${sos.gps_lng}`
+                : null;
+            return (
+              <div key={sos.id} className="rounded-2xl bg-red-50 border-2 border-red-300 p-4">
+                <div className="flex items-start gap-2">
+                  <Siren className="h-5 w-5 text-red-600 flex-shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <p className="font-extrabold text-red-700">SOS — {washer?.full_name ?? "Unknown"}</p>
+                    <p className="text-xs text-red-500 mt-0.5">
+                      {new Date(sos.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      {sos.message ? ` · ${sos.message}` : ""}
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-3 flex gap-2">
+                  {mapsUrl && (
+                    <a
+                      href={mapsUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex-1 text-center rounded-xl bg-white border border-red-300 text-red-700 font-bold py-2.5 text-sm"
+                    >
+                      View Location
+                    </a>
+                  )}
+                  <button
+                    onClick={() => resolveSos(sos)}
+                    disabled={busyId === sos.id}
+                    className="flex-1 rounded-xl bg-red-600 disabled:opacity-50 text-white font-bold py-2.5 text-sm"
+                  >
+                    {busyId === sos.id ? "Saving…" : "Acknowledge"}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       <div className="bg-gray-100 rounded-2xl p-4">
         <button
@@ -226,6 +377,104 @@ export default function Alerts() {
                       >
                         {busyId === issue.id ? "Resolving…" : "Mark Resolved"}
                       </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <h2 className="text-sm font-extrabold text-gray-900 tracking-wide mb-3">
+              ADVANCE REQUESTS
+            </h2>
+            {advanceRequests.length === 0 ? (
+              <p className="text-sm text-gray-400 bg-gray-100 rounded-2xl px-4 py-4">
+                No pending advance requests.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {advanceRequests.map((req) => {
+                  const washer = requesters.get(req.washer_id);
+                  return (
+                    <div key={req.id} className="bg-gray-100 rounded-2xl p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="font-extrabold text-gray-900">
+                          ₹{req.amount.toLocaleString("en-IN")}
+                        </p>
+                        <span className="flex-shrink-0 text-xs font-bold text-blue-600 border border-blue-600 rounded-full px-3 py-1">
+                          Pending
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-500 mt-1">{washer?.full_name ?? "Unknown"}</p>
+                      {req.reason && <p className="text-sm text-gray-700 mt-1">{req.reason}</p>}
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          onClick={() => resolveAdvance(req, "rejected")}
+                          disabled={busyId === req.id}
+                          className="flex-1 h-11 rounded-full border border-gray-300 disabled:opacity-50 font-bold text-gray-900"
+                        >
+                          Reject
+                        </button>
+                        <button
+                          onClick={() => resolveAdvance(req, "approved")}
+                          disabled={busyId === req.id}
+                          className="flex-1 h-11 rounded-full bg-blue-600 disabled:opacity-50 font-bold text-white"
+                        >
+                          {busyId === req.id ? "Saving…" : "Approve"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <h2 className="text-sm font-extrabold text-gray-900 tracking-wide mb-3">
+              COVER REQUESTS
+            </h2>
+            {coverRequests.length === 0 ? (
+              <p className="text-sm text-gray-400 bg-gray-100 rounded-2xl px-4 py-4">
+                No pending cover requests.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {coverRequests.map((req) => {
+                  const washer = requesters.get(req.washer_id);
+                  return (
+                    <div key={req.id} className="bg-gray-100 rounded-2xl p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="font-extrabold text-gray-900">
+                          {new Date(req.cover_date).toLocaleDateString("en-IN", {
+                            weekday: "short",
+                            day: "numeric",
+                            month: "short",
+                          })}
+                        </p>
+                        <span className="flex-shrink-0 text-xs font-bold text-blue-600 border border-blue-600 rounded-full px-3 py-1">
+                          Pending
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-500 mt-1">{washer?.full_name ?? "Unknown"}</p>
+                      {req.reason && <p className="text-sm text-gray-700 mt-1">{req.reason}</p>}
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          onClick={() => resolveCover(req, "rejected")}
+                          disabled={busyId === req.id}
+                          className="flex-1 h-11 rounded-full border border-gray-300 disabled:opacity-50 font-bold text-gray-900"
+                        >
+                          Reject
+                        </button>
+                        <button
+                          onClick={() => resolveCover(req, "approved")}
+                          disabled={busyId === req.id}
+                          className="flex-1 h-11 rounded-full bg-blue-600 disabled:opacity-50 font-bold text-white"
+                        >
+                          {busyId === req.id ? "Saving…" : "Approve"}
+                        </button>
+                      </div>
                     </div>
                   );
                 })}

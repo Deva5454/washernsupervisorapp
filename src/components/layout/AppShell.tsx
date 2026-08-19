@@ -1,7 +1,8 @@
-import { type ReactNode } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { Bell, Home, CalendarDays, Wallet, Package, MoreHorizontal, LayoutGrid, ClipboardCheck, AlertTriangle, TrendingUp, X } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
+import { supabase } from "../../lib/supabase";
 import type { Role } from "../../lib/types";
 
 interface NavItem {
@@ -27,9 +28,29 @@ const supervisorNav: NavItem[] = [
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const { role, switchRole, gpsLostNotice, dismissGpsLostNotice } = useAuth();
+  const { profile, role, switchRole, gpsLostNotice, dismissGpsLostNotice } = useAuth();
   const navigate = useNavigate();
   const nav = role === "supervisor" ? supervisorNav : washerNav;
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  useEffect(() => {
+    if (!profile) return;
+    let cancelled = false;
+    supabase
+      .from("notifications")
+      .select("id", { count: "exact", head: true })
+      .eq("profile_id", profile.id)
+      .is("read_at", null)
+      .then(({ count }) => {
+        if (!cancelled) setUnreadCount(count ?? 0);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Re-checked on every navigation (children change) so the badge
+    // clears shortly after visiting Notifications, without a live
+    // subscription.
+  }, [profile, children]);
 
   function selectRole(next: Role) {
     if (next === role) return;
@@ -59,9 +80,15 @@ export function AppShell({ children }: { children: ReactNode }) {
             </h1>
             <button
               aria-label="Notifications"
-              className="h-9 w-9 rounded-full bg-white/10 flex items-center justify-center"
+              onClick={() => navigate("/notifications")}
+              className="relative h-9 w-9 rounded-full bg-white/10 flex items-center justify-center"
             >
               <Bell className="h-4.5 w-4.5 text-white" />
+              {unreadCount > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 h-4 min-w-[16px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+                  {unreadCount > 9 ? "9+" : unreadCount}
+                </span>
+              )}
             </button>
           </div>
 

@@ -8,6 +8,7 @@ import ActiveWash from "./pages/washer/ActiveWash";
 import WasherEarnings from "./pages/washer/Earnings";
 import WasherStock from "./pages/washer/Stock";
 import WasherMore from "./pages/washer/More";
+import Notifications from "./pages/Notifications";
 
 import SupervisorDashboard from "./pages/supervisor/Dashboard";
 import SupervisorAudit from "./pages/supervisor/Audit";
@@ -58,6 +59,7 @@ export default function App() {
       <AuthProvider>
         <Routes>
           <Route path="/" element={<Gate><RoleHome /></Gate>} />
+          <Route path="/notifications" element={<Gate><Notifications /></Gate>} />
 
           <Route path="/washer" element={<Gate><WasherHome /></Gate>} />
           <Route path="/washer/jobs" element={<Gate><WasherJobs /></Gate>} />

@@ -1,10 +1,18 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, Siren } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabase";
-import type { AttendanceRecord } from "../../lib/types";
+import type { AttendanceRecord, IssueCategory } from "../../lib/types";
 
-type Section = "attendance" | "issue" | "profile" | null;
+type Section = "attendance" | "issue" | "advance" | "cover" | "sos" | "profile" | null;
+
+const CATEGORY_LABEL: Record<IssueCategory, string> = {
+  broken_part: "Broken Part",
+  lost_damaged_bottle: "Lost/Damaged Bottle",
+  repair_request: "Repair Request",
+  pre_damage: "Pre-Existing Damage",
+  other: "Other",
+};
 
 const ATTENDANCE_LABEL: Record<AttendanceRecord["status"], string> = {
   present: "Present",
@@ -145,6 +153,7 @@ function AttendanceHistory({ washerId }: { washerId: string }) {
 }
 
 function ReportIssue({ washerId }: { washerId: string }) {
+  const [category, setCategory] = useState<IssueCategory | null>(null);
   const [title, setTitle] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -157,13 +166,17 @@ function ReportIssue({ washerId }: { washerId: string }) {
     setError(null);
     setSent(false);
     try {
+      const finalTitle = category ? `${CATEGORY_LABEL[category]} — ${title.trim()}` : title.trim();
       const { error } = await supabase.from("issues").insert({
         reported_by: washerId,
-        title: title.trim(),
+        title: finalTitle,
+        category,
+        item_name: category ? title.trim() : null,
       });
       if (error) throw error;
       setSent(true);
       setTitle("");
+      setCategory(null);
     } catch (err) {
       console.error(err);
       setError("Could not submit your report. Please try again.");
@@ -175,11 +188,27 @@ function ReportIssue({ washerId }: { washerId: string }) {
   return (
     <div className="px-4 pb-4 bg-white">
       <form onSubmit={handleSubmit} className="space-y-2 pt-1">
+        <div className="grid grid-cols-2 gap-2">
+          {(Object.keys(CATEGORY_LABEL) as IssueCategory[])
+            .filter((c) => c !== "pre_damage")
+            .map((c) => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => setCategory((cur) => (cur === c ? null : c))}
+                className={`rounded-xl px-3 py-2 text-xs font-bold text-left ${
+                  category === c ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-700"
+                }`}
+              >
+                {CATEGORY_LABEL[c]}
+              </button>
+            ))}
+        </div>
         <input
           type="text"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Describe the issue…"
+          placeholder={category ? "Item / details" : "Describe the issue…"}
           className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-600"
         />
         <button
@@ -191,7 +220,211 @@ function ReportIssue({ washerId }: { washerId: string }) {
         </button>
       </form>
       {error && <p className="text-sm text-red-600 mt-2">{error}</p>}
-      {sent && <p className="text-sm text-green-700 mt-2">Issue reported to your supervisor.</p>}
+      {sent && <p className="text-sm text-green-700 mt-2">Reported to your supervisor.</p>}
+    </div>
+  );
+}
+
+function RequestAdvance({ washerId }: { washerId: string }) {
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [sent, setSent] = useState(false);
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    const amt = Number(amount);
+    if (!amt || amt <= 0) return;
+    setSubmitting(true);
+    setError(null);
+    setSent(false);
+    try {
+      const { error } = await supabase.from("advance_requests").insert({
+        washer_id: washerId,
+        amount: amt,
+        reason: reason.trim() || null,
+      });
+      if (error) throw error;
+      setSent(true);
+      setAmount("");
+      setReason("");
+    } catch (err) {
+      console.error(err);
+      setError("Could not submit your request. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="px-4 pb-4 bg-white">
+      <form onSubmit={handleSubmit} className="space-y-2 pt-1">
+        <input
+          type="number"
+          inputMode="decimal"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          placeholder="Amount (₹)"
+          className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-600"
+        />
+        <input
+          type="text"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="Reason (optional)"
+          className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-600"
+        />
+        <button
+          type="submit"
+          disabled={submitting || !amount}
+          className="w-full rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold py-2.5"
+        >
+          {submitting ? "Submitting…" : "Submit Request"}
+        </button>
+      </form>
+      {error && <p className="text-sm text-red-600 mt-2">{error}</p>}
+      {sent && <p className="text-sm text-green-700 mt-2">Request sent to your supervisor.</p>}
+    </div>
+  );
+}
+
+function RequestCover({ washerId }: { washerId: string }) {
+  const [date, setDate] = useState("");
+  const [reason, setReason] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [sent, setSent] = useState(false);
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!date) return;
+    setSubmitting(true);
+    setError(null);
+    setSent(false);
+    try {
+      const { error } = await supabase.from("cover_requests").insert({
+        washer_id: washerId,
+        cover_date: date,
+        reason: reason.trim() || null,
+      });
+      if (error) throw error;
+      setSent(true);
+      setDate("");
+      setReason("");
+    } catch (err) {
+      console.error(err);
+      setError("Could not submit your request. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="px-4 pb-4 bg-white">
+      <form onSubmit={handleSubmit} className="space-y-2 pt-1">
+        <input
+          type="date"
+          value={date}
+          onChange={(e) => setDate(e.target.value)}
+          min={new Date().toISOString().slice(0, 10)}
+          className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-600"
+        />
+        <input
+          type="text"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="Reason (optional)"
+          className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-600"
+        />
+        <button
+          type="submit"
+          disabled={submitting || !date}
+          className="w-full rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold py-2.5"
+        >
+          {submitting ? "Submitting…" : "Request Cover for This Day"}
+        </button>
+      </form>
+      {error && <p className="text-sm text-red-600 mt-2">{error}</p>}
+      {sent && <p className="text-sm text-green-700 mt-2">Request sent to your supervisor.</p>}
+    </div>
+  );
+}
+
+function SosPanel({ washerId }: { washerId: string }) {
+  const [confirming, setConfirming] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [sent, setSent] = useState(false);
+
+  async function sendSos() {
+    setSending(true);
+    setError(null);
+    try {
+      let gps: { lat: number; lng: number } | null = null;
+      if ("geolocation" in navigator) {
+        gps = await new Promise((resolve) => {
+          navigator.geolocation.getCurrentPosition(
+            (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+            () => resolve(null),
+            { enableHighAccuracy: true, timeout: 8000 }
+          );
+        });
+      }
+      const { error } = await supabase.from("sos_alerts").insert({
+        washer_id: washerId,
+        gps_lat: gps?.lat ?? null,
+        gps_lng: gps?.lng ?? null,
+      });
+      if (error) throw error;
+      setSent(true);
+      setConfirming(false);
+    } catch (err) {
+      console.error(err);
+      setError("Could not send the alert. Please try again, or call your supervisor directly.");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <div className="px-4 pb-4 bg-white">
+      {!confirming ? (
+        <button
+          onClick={() => {
+            setConfirming(true);
+            setSent(false);
+            setError(null);
+          }}
+          className="w-full flex items-center justify-center gap-2 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold py-3"
+        >
+          <Siren className="h-4 w-4" />
+          Send SOS
+        </button>
+      ) : (
+        <div className="space-y-3 pt-1">
+          <p className="text-sm text-gray-700">
+            Send an SOS alert to your supervisor? Your current location will be shared immediately.
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setConfirming(false)}
+              className="flex-1 rounded-xl border border-gray-300 text-gray-700 font-bold py-2.5"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={sendSos}
+              disabled={sending}
+              className="flex-1 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-bold py-2.5"
+            >
+              {sending ? "Sending…" : "Confirm SOS"}
+            </button>
+          </div>
+        </div>
+      )}
+      {error && <p className="text-sm text-red-600 mt-2">{error}</p>}
+      {sent && <p className="text-sm text-green-700 mt-2">SOS sent — your supervisor has been alerted.</p>}
     </div>
   );
 }
@@ -246,6 +479,27 @@ export default function More() {
           onClick={() => toggle("issue")}
         />
         {openSection === "issue" && <ReportIssue washerId={profile.id} />}
+
+        <MenuRow
+          label="Request Advance"
+          open={openSection === "advance"}
+          onClick={() => toggle("advance")}
+        />
+        {openSection === "advance" && <RequestAdvance washerId={profile.id} />}
+
+        <MenuRow
+          label="Request Cover"
+          open={openSection === "cover"}
+          onClick={() => toggle("cover")}
+        />
+        {openSection === "cover" && <RequestCover washerId={profile.id} />}
+
+        <MenuRow
+          label="Emergency SOS"
+          open={openSection === "sos"}
+          onClick={() => toggle("sos")}
+        />
+        {openSection === "sos" && <SosPanel washerId={profile.id} />}
 
         <MenuRow
           label="My Profile"

@@ -126,6 +126,13 @@ export default function ActiveWash() {
   const [paymentReference, setPaymentReference] = useState("");
   const [paymentBusy, setPaymentBusy] = useState(false);
 
+  const [preDamageOpen, setPreDamageOpen] = useState(false);
+  const [preDamageNote, setPreDamageNote] = useState("");
+  const [preDamagePhoto, setPreDamagePhoto] = useState<File | null>(null);
+  const [preDamageBusy, setPreDamageBusy] = useState(false);
+  const [preDamageSent, setPreDamageSent] = useState(false);
+  const preDamageInputRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     if (!jobId) return;
     load();
@@ -240,6 +247,38 @@ export default function ActiveWash() {
     }
   }
 
+  // Logged before washing starts, so the washer isn't blamed for damage
+  // that was already there — a photo plus a short note, tied to this job.
+  async function submitPreDamage() {
+    if (!job || !job.washer_id || !preDamageNote.trim()) return;
+    setPreDamageBusy(true);
+    setError(null);
+    try {
+      let photoUrl: string | null = null;
+      if (preDamagePhoto) {
+        photoUrl = await uploadPhoto(preDamagePhoto, `jobs/${job.id}/predamage`);
+      }
+      const { error: insertErr } = await supabase.from("issues").insert({
+        reported_by: job.washer_id,
+        title: `Pre-Existing Damage — ${job.vehicle_reg}`,
+        category: "pre_damage",
+        job_id: job.id,
+        photo_url: photoUrl,
+        item_name: preDamageNote.trim(),
+      });
+      if (insertErr) throw insertErr;
+      setPreDamageSent(true);
+      setPreDamageOpen(false);
+      setPreDamageNote("");
+      setPreDamagePhoto(null);
+    } catch (err) {
+      console.error(err);
+      setError("Could not log pre-existing damage. Please try again.");
+    } finally {
+      setPreDamageBusy(false);
+    }
+  }
+
   async function completeJob() {
     if (!job) return;
     setAdvancing(true);
@@ -346,13 +385,84 @@ export default function ActiveWash() {
       )}
 
       {job.execution_stage === "arrived" && (
-        <button
-          onClick={() => advanceStage("washing")}
-          disabled={advancing}
-          className="w-full h-14 rounded-2xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold"
-        >
-          {advancing ? "Starting…" : "Start Washing"}
-        </button>
+        <div className="space-y-3">
+          {!preDamageOpen ? (
+            <button
+              onClick={() => setPreDamageOpen(true)}
+              className="text-sm font-bold text-blue-600"
+            >
+              Report Pre-Existing Damage
+            </button>
+          ) : (
+            <div className="rounded-2xl bg-gray-100 p-4 space-y-3">
+              <p className="text-xs font-bold text-gray-900 uppercase tracking-wide">
+                Report Pre-Existing Damage
+              </p>
+              <button
+                type="button"
+                onClick={() => preDamageInputRef.current?.click()}
+                className="w-full h-24 rounded-2xl border-2 border-dashed border-gray-300 bg-white flex flex-col items-center justify-center gap-1 overflow-hidden relative"
+              >
+                {preDamagePhoto ? (
+                  <img
+                    src={URL.createObjectURL(preDamagePhoto)}
+                    alt="Pre-existing damage"
+                    className="absolute inset-0 w-full h-full object-cover"
+                  />
+                ) : (
+                  <>
+                    <Camera className="h-6 w-6 text-gray-400" />
+                    <span className="text-xs text-gray-500 font-medium">Tap to capture photo</span>
+                  </>
+                )}
+              </button>
+              <input
+                ref={preDamageInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (file) setPreDamagePhoto(file);
+                }}
+              />
+              <input
+                type="text"
+                value={preDamageNote}
+                onChange={(e) => setPreDamageNote(e.target.value)}
+                placeholder="What was already damaged?"
+                className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-600"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setPreDamageOpen(false)}
+                  className="flex-1 rounded-xl border border-gray-300 text-gray-700 font-bold py-2.5"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={submitPreDamage}
+                  disabled={!preDamageNote.trim() || preDamageBusy}
+                  className="flex-1 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold py-2.5"
+                >
+                  {preDamageBusy ? "Saving…" : "Log Damage"}
+                </button>
+              </div>
+            </div>
+          )}
+          {preDamageSent && (
+            <p className="text-sm text-green-700">Pre-existing damage logged.</p>
+          )}
+          <button
+            onClick={() => advanceStage("washing")}
+            disabled={advancing}
+            className="w-full h-14 rounded-2xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold"
+          >
+            {advancing ? "Starting…" : "Start Washing"}
+          </button>
+        </div>
       )}
 
       {job.execution_stage === "washing" && (
