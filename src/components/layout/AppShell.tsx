@@ -44,7 +44,12 @@ export function AppShell({ children }: { children: ReactNode }) {
     // an actual phone (viewport already narrow) this backdrop is
     // invisible and costs nothing; max-w-md is wider than any phone.
     <div className="min-h-screen bg-gray-200">
-      <div className="max-w-md mx-auto min-h-screen bg-gray-50 shadow-xl">
+      {/* The card itself hugs its content (no min-h-screen) — a
+          data-sparse page (few team members, no jobs yet) shouldn't
+          trail off into a wall of empty card background. Any leftover
+          space below simply shows the backdrop, same as a real phone
+          app's content ending above its tab bar. */}
+      <div className="max-w-md mx-auto bg-gray-50 shadow-xl">
         {/* Top bar — deep navy fading to the brand cerulean, standing in
             for the near-black header this used to be. */}
         <div className="bg-gradient-to-r from-navy to-brand text-white px-4 pt-5 pb-4 shadow-md">
