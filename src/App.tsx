@@ -19,13 +19,28 @@ function Gate({ children }: { children: React.ReactNode }) {
   const { profile, loading, role } = useAuth();
 
   if (loading) {
-    return <div className="min-h-screen bg-gray-50 flex items-center justify-center text-gray-400">Loading…</div>;
+    return (
+      <div className="min-h-screen bg-gray-200 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-10 w-10 rounded-full border-4 border-brand/20 border-t-brand animate-spin" />
+          <p className="text-gray-400 text-sm font-semibold">Loading CleanCar…</p>
+        </div>
+      </div>
+    );
   }
   if (!profile) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center text-center px-6 text-gray-400">
-        No {role} account found yet — add one in Supabase (Authentication → Users → Add User, then set that
-        user's role to "{role}" in the profiles table).
+      <div className="min-h-screen bg-gray-200 flex items-center justify-center px-6">
+        <div className="max-w-sm w-full rounded-3xl bg-white shadow-sm border border-gray-200 px-6 py-8 text-center">
+          <div className="mx-auto h-12 w-12 rounded-2xl bg-brand/10 flex items-center justify-center mb-4">
+            <span className="text-brand text-xl font-extrabold">!</span>
+          </div>
+          <p className="font-extrabold text-gray-900 mb-1">No {role} account found yet</p>
+          <p className="text-sm text-gray-500">
+            Add one in Supabase (Authentication → Users → Add User, then set that user's role to "{role}" in
+            the profiles table).
+          </p>
+        </div>
       </div>
     );
   }

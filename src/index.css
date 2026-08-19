@@ -7,6 +7,10 @@ html, body, #root {
 }
 
 body {
+  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   overscroll-behavior-y: none;
+  /* Matches AppShell's backdrop — avoids a flash of stark white before
+     the app mounts or on any unstyled edge. */
+  background-color: #e2e8f0;
 }

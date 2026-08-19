@@ -103,7 +103,7 @@ export default function Home() {
 
       <CheckInPanel />
 
-      <div className="rounded-3xl bg-gradient-to-br from-gray-900 to-gray-800 text-white px-5 py-6">
+      <div className="rounded-3xl bg-gradient-to-br from-navy to-brand text-white px-5 py-6 shadow-lg shadow-brand/20">
         <p className="text-xs font-bold tracking-widest text-blue-400 uppercase">Today</p>
         <p className="text-3xl font-extrabold mt-1">
           {doneJobs} of {totalJobs} washes done

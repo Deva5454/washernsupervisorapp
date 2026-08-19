@@ -81,7 +81,7 @@ export default function Earnings() {
         <div className="rounded-2xl bg-red-50 text-red-600 text-sm px-4 py-3">{error}</div>
       )}
 
-      <div className="rounded-3xl bg-gradient-to-br from-gray-900 to-gray-800 text-white px-5 py-8 text-center">
+      <div className="rounded-3xl bg-gradient-to-br from-navy to-brand text-white px-5 py-8 text-center shadow-lg shadow-brand/20">
         <p className="text-xs font-bold tracking-widest text-blue-400 uppercase">Last 7 Days</p>
         <p className="text-4xl font-extrabold mt-2">₹{weekTotal.toLocaleString("en-IN")}</p>
         <p className="text-sm text-white/60 mt-2">

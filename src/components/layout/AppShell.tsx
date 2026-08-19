@@ -45,21 +45,29 @@ export function AppShell({ children }: { children: ReactNode }) {
     // invisible and costs nothing; max-w-md is wider than any phone.
     <div className="min-h-screen bg-gray-200">
       <div className="max-w-md mx-auto min-h-screen bg-gray-50 shadow-xl">
-        {/* Top bar */}
-        <div className="bg-gray-900 text-white px-4 pt-5 pb-4">
+        {/* Top bar — deep navy fading to the brand cerulean, standing in
+            for the near-black header this used to be. */}
+        <div className="bg-gradient-to-r from-navy to-brand text-white px-4 pt-5 pb-4 shadow-md">
           <div className="flex items-center justify-between mb-4">
-            <h1 className="text-xl font-extrabold">
-              CleanCar<span className="text-blue-500">.</span>
+            <h1 className="text-xl font-extrabold tracking-tight">
+              CleanCar<span className="text-white/70">.</span>
             </h1>
-            <Bell className="h-5 w-5 text-white/80" />
+            <button
+              aria-label="Notifications"
+              className="h-9 w-9 rounded-full bg-white/10 flex items-center justify-center"
+            >
+              <Bell className="h-4.5 w-4.5 text-white" />
+            </button>
           </div>
 
-          {/* Role toggle — a local view switch, not a login */}
-          <div className="flex rounded-full border border-white/20 p-1">
+          {/* Role toggle — a local view switch, not a login. The active
+              segment is solid white so it reads clearly against the blue
+              gradient, rather than blending into it. */}
+          <div className="flex rounded-full bg-white/10 border border-white/15 p-1">
             <button
               onClick={() => selectRole("washer")}
               className={`flex-1 rounded-full py-1.5 text-sm font-bold transition-colors ${
-                role === "washer" ? "bg-blue-600 text-white" : "text-white/70"
+                role === "washer" ? "bg-white text-navy shadow-sm" : "text-white/90"
               }`}
             >
               Car Washer
@@ -67,7 +75,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <button
               onClick={() => selectRole("supervisor")}
               className={`flex-1 rounded-full py-1.5 text-sm font-bold transition-colors ${
-                role === "supervisor" ? "bg-blue-600 text-white" : "text-white/70"
+                role === "supervisor" ? "bg-white text-navy shadow-sm" : "text-white/75"
               }`}
             >
               Supervisor
@@ -92,7 +100,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           same max-w-md so it lines up under the card on wide screens,
           and stays pinned to the bottom while the card's content
           scrolls, exactly like a real phone's tab bar. */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-50">
+      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-[0_-2px_12px_rgba(11,61,87,0.06)] z-50">
         <div className="grid grid-cols-5 h-16 max-w-md mx-auto">
           {nav.map(({ to, label, icon: Icon }) => (
             <NavLink
@@ -101,12 +109,24 @@ export function AppShell({ children }: { children: ReactNode }) {
               end={to === "/washer" || to === "/supervisor"}
               className={({ isActive }) =>
                 `flex flex-col items-center justify-center gap-1 ${
-                  isActive ? "text-blue-600" : "text-gray-400"
+                  isActive ? "text-brand" : "text-gray-400"
                 }`
               }
             >
-              <Icon className="w-5 h-5" />
-              <span className="text-[10px] font-medium leading-none">{label}</span>
+              {({ isActive }) => (
+                <>
+                  <span
+                    className={`h-7 w-11 rounded-full flex items-center justify-center transition-colors ${
+                      isActive ? "bg-brand/10" : ""
+                    }`}
+                  >
+                    <Icon className="w-5 h-5" />
+                  </span>
+                  <span className={`text-[10px] leading-none ${isActive ? "font-bold" : "font-medium"}`}>
+                    {label}
+                  </span>
+                </>
+              )}
             </NavLink>
           ))}
         </div>
