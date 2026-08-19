@@ -75,39 +75,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [role]);
 
-  async function loadAttendance(washerId: string) {
+  // attendance.washer_id is a generic profile FK despite the column
+  // name — both washers and supervisors punch in/out into the same
+  // table (per-role separation isn't needed, "who" is already known
+  // from the id).
+  async function loadAttendance(profileId: string) {
     const { data } = await supabase
       .from("attendance")
       .select("*")
-      .eq("washer_id", washerId)
+      .eq("washer_id", profileId)
       .eq("date", todayISO())
       .maybeSingle();
     setTodayAttendance((data as AttendanceRecord) ?? null);
   }
 
   async function refreshAttendance() {
-    if (profile?.role === "washer") await loadAttendance(profile.id);
+    if (profile) await loadAttendance(profile.id);
   }
 
   useEffect(() => {
-    if (profile?.role === "washer") {
+    if (profile) {
       loadAttendance(profile.id);
     } else {
       setTodayAttendance(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profile?.id, profile?.role]);
+  }, [profile?.id]);
 
   // GPS-loss auto-logout: while checked in (present/late today, not
   // already logged out by a prior GPS loss), keep watching position. If
   // access is revoked mid-shift, mark the attendance row logged-out and
-  // surface a real, visible notice — never a silent logout.
+  // surface a real, visible notice — never a silent logout. Applies to
+  // whichever role is currently checked in, washer or supervisor alike.
   useEffect(() => {
     const isCheckedIn =
-      profile?.role === "washer" &&
+      profile &&
       todayAttendance &&
       (todayAttendance.status === "present" || todayAttendance.status === "late") &&
-      !todayAttendance.gps_lost_at;
+      !todayAttendance.gps_lost_at &&
+      !todayAttendance.check_out_time;
 
     function clearWatch() {
       if (watchIdRef.current !== null && "geolocation" in navigator) {
@@ -138,7 +144,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           console.error("Failed to record GPS loss", e);
         }
         setGpsLostNotice(
-          "Your location was turned off, so you've been logged out. Turn location back on and check in again from Home."
+          "Your location was turned off, so you've been logged out. Turn location back on and check in again."
         );
         if (profile) await loadAttendance(profile.id);
       },
@@ -147,7 +153,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     return clearWatch;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profile?.id, profile?.role, todayAttendance?.status, todayAttendance?.gps_lost_at]);
+  }, [
+    profile?.id,
+    todayAttendance?.status,
+    todayAttendance?.gps_lost_at,
+    todayAttendance?.check_out_time,
+  ]);
 
   function switchRole(next: Role) {
     localStorage.setItem(ROLE_KEY, next);

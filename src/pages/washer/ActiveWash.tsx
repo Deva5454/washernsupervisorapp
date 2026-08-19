@@ -13,6 +13,11 @@ const STAGES: { key: ExecutionStage; label: string }[] = [
   { key: "done", label: "Done" },
 ];
 
+// Every completed wash uses 4 microfiber cloths from the washer's own
+// stock — deducted automatically so "My Stock" reflects real usage
+// without the washer having to log it by hand.
+const CLOTHS_PER_WASH = 4;
+
 const REQUIRED_DIRECTIONS: PhotoDirection[] = ["front", "back", "left", "right"];
 const DIRECTION_LABEL: Record<PhotoDirection, string> = {
   front: "Front",
@@ -178,6 +183,26 @@ export default function ActiveWash() {
     }
   }
 
+  // Best-effort: if this washer has no cloth stock item on file, there's
+  // nothing to deduct — a missing stock row shouldn't block completing
+  // the job.
+  async function deductCloths(washerId: string) {
+    try {
+      const { data, error } = await supabase
+        .from("stock_items")
+        .select("id, remaining_qty")
+        .eq("washer_id", washerId)
+        .ilike("material_name", "%cloth%")
+        .limit(1)
+        .maybeSingle();
+      if (error || !data) return;
+      const next = Math.max(0, data.remaining_qty - CLOTHS_PER_WASH);
+      await supabase.from("stock_items").update({ remaining_qty: next }).eq("id", data.id);
+    } catch (err) {
+      console.error("Cloth deduction failed", err);
+    }
+  }
+
   async function completeJob() {
     if (!job) return;
     setAdvancing(true);
@@ -188,6 +213,7 @@ export default function ActiveWash() {
         .update({ status: "done", execution_stage: "done" })
         .eq("id", job.id);
       if (error) throw error;
+      if (job.washer_id) await deductCloths(job.washer_id);
       navigate("/washer/jobs");
     } catch (err) {
       console.error(err);

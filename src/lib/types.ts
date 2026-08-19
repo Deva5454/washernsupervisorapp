@@ -7,6 +7,7 @@ export interface Profile {
   phone: string | null;
   zone: string | null;
   avatar_url: string | null;
+  cloth_limit: number | null;
   created_at: string;
 }
 
@@ -28,6 +29,7 @@ export interface Job {
   status: JobStatus;
   execution_stage: ExecutionStage;
   is_cover: boolean;
+  is_urgent: boolean;
   job_date: string;
   created_at: string;
   updated_at: string;
@@ -108,5 +110,13 @@ export interface Alert {
   id: string;
   zone: string | null;
   message: string;
+  created_at: string;
+}
+
+export interface ClothExchange {
+  id: string;
+  washer_id: string;
+  used_returned: number;
+  new_received: number;
   created_at: string;
 }

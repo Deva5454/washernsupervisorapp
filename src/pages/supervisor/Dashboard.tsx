@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
+import { CheckInPanel } from "../../components/CheckInPanel";
 import type { AttendanceRecord, Job, Profile } from "../../lib/types";
 
 // Local-timezone "today" as a YYYY-MM-DD date string, matching the
@@ -155,6 +156,8 @@ export default function Dashboard() {
       </div>
 
       {error && <p className="text-sm text-red-600 bg-red-50 rounded-2xl px-4 py-3">{error}</p>}
+
+      <CheckInPanel />
 
       <div className="grid grid-cols-3 gap-3">
         <div className="bg-gray-100 rounded-2xl py-5 text-center">

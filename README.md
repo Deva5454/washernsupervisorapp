@@ -28,6 +28,8 @@ means and trades away.
      - Had the old auth-tied `profiles` → `supabase_no_login_migration.sql`
      - Had no-login but no Active Wash tables/columns yet →
        `supabase_active_wash_migration.sql`
+     - Had Active Wash but no urgent flag / cloth limit / cloth exchange
+       log yet → `supabase_urgent_cloth_migration.sql`
      `supabase_schema.sql`'s `create table if not exists` /
      `add column if not exists` won't retroactively fix an
      already-created table in every case.
@@ -68,7 +70,12 @@ known, reversible path if you ever need it.
 See `supabase_schema.sql` for the full schema. In short: `profiles` (one
 row per person, `role` is `washer` or `supervisor`), `jobs`,
 `attendance`, `stock_items`, `payouts`, `issues`, `audits`, `alerts`,
-`job_photos`.
+`job_photos`, `cloth_exchanges`.
+
+`profiles.cloth_limit` is a per-washer cap on cloths receivable in one
+hand-over. It's owned and set by the **City Manager** role, which lives
+in a separate (ERP) web app this one connects to — nothing in this app
+writes that column, it's read-only here.
 
 Beyond the two seeded profiles, there's no other seed/demo data — every
 screen reads real rows from these tables, so a fresh project will show
@@ -107,3 +114,40 @@ Camera and location capture use the browser's native `<input capture>`
 and Geolocation APIs — no extra SDK, but both require the browser to
 have camera/location permission, and only work over HTTPS (Vercel's
 deployment is HTTPS by default; `localhost` also works for local dev).
+
+## Supervisor check-in
+
+Supervisors punch in/out with the same real selfie + GPS verification as
+washers (`CheckInPanel`, shared by both Home and Dashboard), including
+the same GPS-loss auto-logout behavior — `attendance.washer_id` is a
+generic profile FK despite the name, so both roles share one table.
+
+## Urgent jobs, packages, and stock
+
+- `jobs.is_urgent` highlights a job card in red with an "Urgent" badge
+  across Active/Upcoming/Completed. There's no UI here to *set* it yet —
+  it's meant to be set by whatever system assigns jobs (e.g. the
+  connected ERP app); this app only displays it. Package name, date, and
+  time are always shown on every job card.
+- Every "Mark Job Complete" automatically deducts 4 cloths from the
+  washer's cloth stock item (matched by `material_name` containing
+  "cloth", case-insensitive). If no such stock item exists yet, nothing
+  is deducted — it's not an error.
+- **My Stock → Cloth Hand-Over** lets a washer log how many used cloths
+  they returned and new ones they received from their supervisor
+  (`cloth_exchanges`), crediting the received count back into stock.
+  `new_received` is capped by `profiles.cloth_limit` when it's set.
+
+## Attendance History
+
+The washer's **More → Attendance History** shows real calendar months,
+not a rolling window: **This Month** (the 1st through today) and **Last
+Month** (the 1st through the last day of the previous month).
+
+## Completed jobs & daily target
+
+The washer's **Jobs → Completed** tab shows the last 30 days of
+completed jobs grouped by day. Any day where completed jobs reach the
+`DAILY_UNIT_TARGET` (25, hardcoded in `Jobs.tsx` to match the base daily
+quota used elsewhere in the wider CleanCar system) gets a "Target hit"
+badge.

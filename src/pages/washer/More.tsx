@@ -37,10 +37,34 @@ function MenuRow({
   );
 }
 
+type MonthView = "current" | "previous";
+
+function toDateStr(d: Date) {
+  return d.toISOString().slice(0, 10);
+}
+
+// Calendar-month range, not a rolling window: "current" is the 1st of this
+// month through today, "previous" is the 1st through the last day of last
+// month — matching how attendance is actually reviewed (by month), rather
+// than an arbitrary trailing-30-days slice.
+function monthRange(view: MonthView) {
+  const now = new Date();
+  if (view === "current") {
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    return { start: toDateStr(start), end: toDateStr(now), label: now.toLocaleDateString("en-IN", { month: "long", year: "numeric" }) };
+  }
+  const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const end = new Date(now.getFullYear(), now.getMonth(), 0);
+  return { start: toDateStr(start), end: toDateStr(end), label: start.toLocaleDateString("en-IN", { month: "long", year: "numeric" }) };
+}
+
 function AttendanceHistory({ washerId }: { washerId: string }) {
+  const [monthView, setMonthView] = useState<MonthView>("current");
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const range = monthRange(monthView);
 
   useEffect(() => {
     let cancelled = false;
@@ -48,14 +72,12 @@ function AttendanceHistory({ washerId }: { washerId: string }) {
       setLoading(true);
       setError(null);
       try {
-        const since = new Date(Date.now() - 29 * 24 * 60 * 60 * 1000)
-          .toISOString()
-          .slice(0, 10);
         const { data, error } = await supabase
           .from("attendance")
           .select("*")
           .eq("washer_id", washerId)
-          .gte("date", since)
+          .gte("date", range.start)
+          .lte("date", range.end)
           .order("date", { ascending: false });
         if (error) throw error;
         if (!cancelled) setRecords((data ?? []) as AttendanceRecord[]);
@@ -70,14 +92,31 @@ function AttendanceHistory({ washerId }: { washerId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [washerId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [washerId, monthView]);
 
   return (
     <div className="px-4 pb-4 bg-white">
+      <div className="flex items-center justify-between gap-2 pt-1 pb-3">
+        <div className="flex gap-2">
+          {(["current", "previous"] as MonthView[]).map((v) => (
+            <button
+              key={v}
+              onClick={() => setMonthView(v)}
+              className={`rounded-full px-3 py-1.5 text-xs font-bold ${
+                monthView === v ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600"
+              }`}
+            >
+              {v === "current" ? "This Month" : "Last Month"}
+            </button>
+          ))}
+        </div>
+        <span className="text-xs text-gray-400">{range.label}</span>
+      </div>
       {loading && <p className="text-sm text-gray-400 py-3">Loading…</p>}
       {error && <p className="text-sm text-red-600 py-3">{error}</p>}
       {!loading && !error && records.length === 0 && (
-        <p className="text-sm text-gray-500 py-3">No attendance records in the last 30 days.</p>
+        <p className="text-sm text-gray-500 py-3">No attendance records for {range.label}.</p>
       )}
       {!loading && !error && records.length > 0 && (
         <div className="divide-y divide-gray-100">

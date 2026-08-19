@@ -18,6 +18,8 @@
 --   - supabase_no_login_migration.sql  (had the old auth-tied profiles)
 --   - supabase_active_wash_migration.sql (had v2 — no-login, but no
 --     Active Wash / job_photos / check-in-verification columns yet)
+--   - supabase_urgent_cloth_migration.sql (had v3, missing is_urgent /
+--     cloth_limit / cloth_exchanges)
 -- ============================================================
 
 create extension if not exists "pgcrypto";
@@ -31,6 +33,11 @@ create table if not exists profiles (
   phone text,
   zone text,
   avatar_url text,
+  -- Per-washer cap on new cloths receivable in one hand-over. Owned by
+  -- the City Manager role, which lives in a different (ERP) web app —
+  -- this app only reads and respects the value, never writes it. Null
+  -- means "no limit enforced."
+  cloth_limit integer,
   created_at timestamptz default now()
 );
 
@@ -52,6 +59,9 @@ create table if not exists jobs (
   execution_stage text not null default 'assigned'
     check (execution_stage in ('assigned', 'en_route', 'arrived', 'washing', 'done')),
   is_cover boolean not null default false,
+  -- No UI in this app sets this yet — exists so the column is real and
+  -- ready for whatever system does set it.
+  is_urgent boolean not null default false,
   job_date date not null default current_date,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
@@ -134,6 +144,17 @@ create table if not exists alerts (
   created_at timestamptz default now()
 );
 
+-- Audit log of washer <-> supervisor cloth hand-overs: how many used
+-- (dirty) cloths the washer returned, how many new (clean) ones they
+-- received back.
+create table if not exists cloth_exchanges (
+  id uuid primary key default gen_random_uuid(),
+  washer_id uuid not null references profiles(id) on delete cascade,
+  used_returned int not null default 0,
+  new_received int not null default 0,
+  created_at timestamptz default now()
+);
+
 -- ── Row Level Security — open to the anon key ───────────────────
 -- No login means no auth.uid() to scope by, so every policy here is a
 -- flat "yes" for anyone holding the anon key. See the file header for
@@ -148,6 +169,7 @@ alter table issues enable row level security;
 alter table audits enable row level security;
 alter table alerts enable row level security;
 alter table job_photos enable row level security;
+alter table cloth_exchanges enable row level security;
 
 create policy "anon_all_profiles"   on profiles      for all to anon using (true) with check (true);
 create policy "anon_all_jobs"       on jobs          for all to anon using (true) with check (true);
@@ -158,6 +180,7 @@ create policy "anon_all_issues"     on issues         for all to anon using (tru
 create policy "anon_all_audits"     on audits         for all to anon using (true) with check (true);
 create policy "anon_all_alerts"     on alerts         for all to anon using (true) with check (true);
 create policy "anon_all_job_photos" on job_photos     for all to anon using (true) with check (true);
+create policy "anon_all_cloth_exchanges" on cloth_exchanges for all to anon using (true) with check (true);
 
 -- Storage: a public bucket for check-in selfies + job proof-of-work photos.
 insert into storage.buckets (id, name, public)
@@ -176,6 +199,7 @@ create index if not exists idx_stock_washer on stock_items(washer_id);
 create index if not exists idx_payouts_washer on payouts(washer_id, payout_date desc);
 create index if not exists idx_audits_washer on audits(washer_id);
 create index if not exists idx_job_photos_job on job_photos(job_id);
+create index if not exists idx_cloth_exchanges_washer on cloth_exchanges(washer_id, created_at desc);
 
 -- ── Seed the two people the app needs to show something real ───
 -- Same names as the reference prototype. Safe to run more than once.
@@ -187,4 +211,4 @@ insert into profiles (full_name, role, zone)
 select 'Priya Sharma', 'supervisor', 'Zone 4'
 where not exists (select 1 from profiles where full_name = 'Priya Sharma');
 
--- Done: 9 tables, 9 RLS policies, 1 storage bucket, 6 indexes, 2 seeded profiles.
+-- Done: 10 tables, 10 RLS policies, 1 storage bucket, 7 indexes, 2 seeded profiles.
