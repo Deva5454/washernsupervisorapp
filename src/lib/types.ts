@@ -13,6 +13,17 @@ export interface Profile {
 
 export type JobStatus = "pending" | "in_progress" | "done" | "issue";
 export type ExecutionStage = "assigned" | "en_route" | "arrived" | "washing" | "done";
+export type VehicleType = "4w" | "2w" | "addon";
+export type PaymentMethod = "cash" | "upi" | "link";
+
+// Weighted daily-quota units, matching the ERP's real incentive-engine
+// unit counts (this app only counts units, it doesn't compute payouts —
+// those still come from the read-only `payouts` table).
+export const VEHICLE_TYPE_UNITS: Record<VehicleType, number> = {
+  "4w": 1.0,
+  "2w": 0.4,
+  addon: 0.5,
+};
 
 export interface Job {
   id: string;
@@ -23,6 +34,7 @@ export interface Job {
   customer_phone: string | null;
   vehicle_make: string;
   vehicle_reg: string;
+  vehicle_type: VehicleType;
   package_name: string;
   area: string;
   city: string;
@@ -30,6 +42,11 @@ export interface Job {
   execution_stage: ExecutionStage;
   is_cover: boolean;
   is_urgent: boolean;
+  payment_required: boolean;
+  payment_amount: number | null;
+  payment_method: PaymentMethod | null;
+  payment_reference: string | null;
+  payment_collected_at: string | null;
   job_date: string;
   created_at: string;
   updated_at: string;
@@ -60,6 +77,7 @@ export interface AttendanceRecord {
   gps_lat: number | null;
   gps_lng: number | null;
   gps_lost_at: string | null;
+  gps_unlock_approved_at: string | null;
   created_at: string;
 }
 
@@ -122,4 +140,16 @@ export interface ClothExchange {
   used_returned: number;
   new_received: number;
   created_at: string;
+}
+
+export type ClothUnitState = "clean" | "dirty" | "locked" | "expired";
+
+export interface ClothUnit {
+  id: string;
+  barcode: string;
+  washer_id: string | null;
+  state: ClothUnitState;
+  wash_count: number;
+  created_at: string;
+  updated_at: string;
 }

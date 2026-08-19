@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
-import { Repeat } from "lucide-react";
+import { Repeat, Scan } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabase";
-import type { StockItem } from "../../lib/types";
+import type { ClothUnit, StockItem } from "../../lib/types";
 
 export default function Stock() {
   const { profile } = useAuth();
   const [items, setItems] = useState<StockItem[]>([]);
+  const [clothUnits, setClothUnits] = useState<ClothUnit[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [requesting, setRequesting] = useState(false);
@@ -19,6 +20,11 @@ export default function Stock() {
   const [exchangeError, setExchangeError] = useState<string | null>(null);
   const [exchangeSent, setExchangeSent] = useState(false);
 
+  const [checkOutBarcode, setCheckOutBarcode] = useState("");
+  const [checkOutBusy, setCheckOutBusy] = useState(false);
+  const [checkOutError, setCheckOutError] = useState<string | null>(null);
+  const [returningId, setReturningId] = useState<string | null>(null);
+
   useEffect(() => {
     if (!profile) return;
     load();
@@ -30,18 +36,91 @@ export default function Stock() {
     setLoading(true);
     setError(null);
     try {
-      const { data, error } = await supabase
-        .from("stock_items")
-        .select("*")
-        .eq("washer_id", profile.id)
-        .order("material_name", { ascending: true });
-      if (error) throw error;
-      setItems((data ?? []) as StockItem[]);
+      const [stockRes, clothRes] = await Promise.all([
+        supabase.from("stock_items").select("*").eq("washer_id", profile.id).order("material_name"),
+        supabase.from("cloth_units").select("*").eq("washer_id", profile.id).order("updated_at", { ascending: false }),
+      ]);
+      if (stockRes.error) throw stockRes.error;
+      if (clothRes.error) throw clothRes.error;
+      setItems((stockRes.data ?? []) as StockItem[]);
+      setClothUnits((clothRes.data ?? []) as ClothUnit[]);
     } catch (err) {
       console.error(err);
       setError("Could not load stock.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  // Barcode-tracked cloths, alongside the aggregate Cloth Hand-Over form
+  // below — this follows individual cloths through clean/dirty states
+  // rather than just a running count. No camera-based barcode scanning
+  // here (would need a scanning library this project doesn't have);
+  // barcodes are entered/pasted from whatever scanner or label the
+  // washer already has.
+  async function checkOutCloth() {
+    if (!profile || !checkOutBarcode.trim()) return;
+    const barcode = checkOutBarcode.trim();
+    setCheckOutBusy(true);
+    setCheckOutError(null);
+    try {
+      const { data: existing, error: findErr } = await supabase
+        .from("cloth_units")
+        .select("*")
+        .eq("barcode", barcode)
+        .maybeSingle();
+      if (findErr) throw findErr;
+
+      if (existing) {
+        if (existing.washer_id && existing.washer_id !== profile.id) {
+          setCheckOutError("This cloth is already checked out to someone else.");
+          return;
+        }
+        if (existing.state !== "clean") {
+          setCheckOutError(`This cloth is marked ${existing.state} — it can't be checked out.`);
+          return;
+        }
+        const { error: updateErr } = await supabase
+          .from("cloth_units")
+          .update({ washer_id: profile.id, updated_at: new Date().toISOString() })
+          .eq("id", existing.id);
+        if (updateErr) throw updateErr;
+      } else {
+        const { error: insertErr } = await supabase
+          .from("cloth_units")
+          .insert({ barcode, washer_id: profile.id, state: "clean" });
+        if (insertErr) throw insertErr;
+      }
+      setCheckOutBarcode("");
+      await load();
+    } catch (err) {
+      console.error(err);
+      setCheckOutError("Could not check out this cloth. Please try again.");
+    } finally {
+      setCheckOutBusy(false);
+    }
+  }
+
+  async function returnCloth(unit: ClothUnit) {
+    setReturningId(unit.id);
+    setError(null);
+    try {
+      const { error: updateErr } = await supabase
+        .from("cloth_units")
+        .update({
+          washer_id: null,
+          state: "dirty",
+          wash_count: unit.wash_count + 1,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", unit.id);
+      if (updateErr) throw updateErr;
+      await load();
+    } catch (err) {
+      console.error(err);
+      setError("Could not return this cloth. Please try again.");
+    } finally {
+      setReturningId(null);
     }
   }
 
@@ -158,6 +237,53 @@ export default function Stock() {
           })}
         </div>
       )}
+
+      <div className="rounded-2xl bg-gray-100 px-4 py-4 space-y-3">
+        <p className="flex items-center gap-2 font-bold text-gray-900">
+          <Scan className="h-4 w-4 text-blue-600" />
+          My Cloths
+        </p>
+        {clothUnits.length === 0 ? (
+          <p className="text-sm text-gray-400">No cloths checked out to you.</p>
+        ) : (
+          <div className="space-y-2">
+            {clothUnits.map((unit) => (
+              <div key={unit.id} className="bg-white rounded-xl px-3 py-2 flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-bold text-gray-900">{unit.barcode}</p>
+                  <p className="text-xs text-gray-500">
+                    {unit.wash_count} wash{unit.wash_count === 1 ? "" : "es"}
+                  </p>
+                </div>
+                <button
+                  onClick={() => returnCloth(unit)}
+                  disabled={returningId === unit.id}
+                  className="flex-shrink-0 rounded-full border border-gray-300 text-xs font-bold px-3 py-1.5 text-gray-900 disabled:opacity-50"
+                >
+                  {returningId === unit.id ? "Returning…" : "Return (Dirty)"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex gap-2 pt-2 border-t border-gray-200">
+          <input
+            type="text"
+            value={checkOutBarcode}
+            onChange={(e) => setCheckOutBarcode(e.target.value)}
+            placeholder="Scan or enter cloth barcode"
+            className="flex-1 rounded-xl border border-gray-200 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-600"
+          />
+          <button
+            onClick={checkOutCloth}
+            disabled={!checkOutBarcode.trim() || checkOutBusy}
+            className="flex-shrink-0 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-bold px-4"
+          >
+            {checkOutBusy ? "…" : "Check Out"}
+          </button>
+        </div>
+        {checkOutError && <p className="text-sm text-red-600">{checkOutError}</p>}
+      </div>
 
       <div className="rounded-2xl bg-gray-100 px-4 py-4">
         <button

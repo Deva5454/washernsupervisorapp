@@ -3,12 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { AlertTriangle, Star } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabase";
+import { DAILY_UNIT_TARGET, formatUnits, weightedUnits } from "../../lib/incentive";
 import type { Job, JobStatus } from "../../lib/types";
-
-// Not yet configurable anywhere in this app — matches the base daily
-// quota used elsewhere in the wider CleanCar system. Only used here to
-// highlight which past days hit it, nothing more.
-const DAILY_UNIT_TARGET = 25;
 
 const STATUS_STYLE: Record<JobStatus, string> = {
   pending: "border border-blue-600 text-blue-600",
@@ -242,7 +238,8 @@ export default function Jobs() {
         ) : (
           <div className="space-y-5">
             {Array.from(completedByDay.entries()).map(([date, jobs]) => {
-              const hitTarget = jobs.length >= DAILY_UNIT_TARGET;
+              const units = weightedUnits(jobs);
+              const hitTarget = units >= DAILY_UNIT_TARGET;
               return (
                 <div key={date}>
                   <div className="flex items-center gap-2 mb-2">
@@ -253,7 +250,7 @@ export default function Jobs() {
                         month: "short",
                       })}
                     </p>
-                    <span className="text-xs text-gray-400">{jobs.length} units</span>
+                    <span className="text-xs text-gray-400">{formatUnits(units)} units</span>
                     {hitTarget && (
                       <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-600 bg-amber-50 rounded-full px-2 py-0.5">
                         <Star className="h-3 w-3 fill-amber-500 text-amber-500" />

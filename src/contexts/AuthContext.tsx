@@ -136,15 +136,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (err.code !== err.PERMISSION_DENIED) return; // transient GPS errors aren't a logout
         clearWatch();
         try {
+          // gps_unlock_approved_at is reset here too — any earlier
+          // approval from a previous loss today shouldn't silently
+          // unlock a brand new one.
           await supabase
             .from("attendance")
-            .update({ gps_lost_at: new Date().toISOString() })
+            .update({ gps_lost_at: new Date().toISOString(), gps_unlock_approved_at: null })
             .eq("id", todayAttendance!.id);
         } catch (e) {
           console.error("Failed to record GPS loss", e);
         }
         setGpsLostNotice(
-          "Your location was turned off, so you've been logged out. Turn location back on and check in again."
+          "Your location was turned off, so you've been logged out. Turn location back on — a supervisor will need to unlock check-in before you can check in again."
         );
         if (profile) await loadAttendance(profile.id);
       },

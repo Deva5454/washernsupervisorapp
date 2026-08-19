@@ -55,6 +55,7 @@ export default function Dashboard() {
 
   const [editingAttendanceId, setEditingAttendanceId] = useState<string | null>(null);
   const [attendanceBusyId, setAttendanceBusyId] = useState<string | null>(null);
+  const [unlockBusyId, setUnlockBusyId] = useState<string | null>(null);
 
   // Cover redistribution: when a washer is marked absent, their
   // undone jobs today can be handed to on-duty teammates in one panel
@@ -173,6 +174,23 @@ export default function Dashboard() {
 
   function jobsNeedingCover(washerId: string) {
     return allJobsToday.filter((j) => j.washer_id === washerId && j.status !== "done");
+  }
+
+  async function unlockCheckIn(attendanceId: string) {
+    setUnlockBusyId(attendanceId);
+    setError(null);
+    try {
+      const { error: updateErr } = await supabase
+        .from("attendance")
+        .update({ gps_unlock_approved_at: new Date().toISOString() })
+        .eq("id", attendanceId);
+      if (updateErr) throw updateErr;
+      await loadAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to unlock check-in.");
+    } finally {
+      setUnlockBusyId(null);
+    }
   }
 
   function openCoverPanel(washerId: string) {
@@ -375,6 +393,7 @@ export default function Dashboard() {
               const rec = attendanceByWasher.get(w.id);
               const uncoveredJobs = jobsNeedingCover(w.id);
               const isAbsent = rec?.status === "absent";
+              const isGpsLocked = !!rec?.gps_lost_at && !rec?.gps_unlock_approved_at;
               return (
                 <div key={w.id} className="bg-gray-100 rounded-2xl px-4 py-3">
                   <div className="flex items-center justify-between gap-2">
@@ -416,6 +435,15 @@ export default function Dashboard() {
                       </button>
                     )}
                   </div>
+                  {isGpsLocked && rec && (
+                    <button
+                      onClick={() => unlockCheckIn(rec.id)}
+                      disabled={unlockBusyId === rec.id}
+                      className="mt-2 w-full rounded-xl bg-red-50 border border-red-300 text-red-600 disabled:opacity-50 text-xs font-bold py-2"
+                    >
+                      {unlockBusyId === rec.id ? "Unlocking…" : "GPS lost — Unlock Check-In"}
+                    </button>
+                  )}
                   {isAbsent && uncoveredJobs.length > 0 && (
                     <button
                       onClick={() => openCoverPanel(w.id)}

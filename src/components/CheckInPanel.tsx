@@ -86,6 +86,7 @@ export function CheckInPanel() {
           gps_lat: gps.lat,
           gps_lng: gps.lng,
           gps_lost_at: null,
+          gps_unlock_approved_at: null,
         },
         { onConflict: "washer_id,date" }
       );
@@ -124,6 +125,10 @@ export function CheckInPanel() {
     !todayAttendance?.gps_lost_at &&
     !todayAttendance?.check_out_time;
   const isCheckedOut = !!todayAttendance?.check_out_time;
+  // A GPS-loss auto-logout stays locked (no self-service re-check-in)
+  // until a supervisor unlocks it — a scaled-down version of the ERP's
+  // City-Manager GPS-violation approval flow.
+  const isLocked = !!todayAttendance?.gps_lost_at && !todayAttendance?.gps_unlock_approved_at;
   const canConfirm = !!selfieFile && !!gps && !submitting;
 
   return (
@@ -132,12 +137,14 @@ export function CheckInPanel() {
         <div className="flex items-center gap-2">
           <span
             className={`h-2.5 w-2.5 rounded-full ${
-              isCheckedIn ? "bg-green-500" : isCheckedOut ? "bg-gray-400" : "bg-gray-400"
+              isCheckedIn ? "bg-green-500" : isLocked ? "bg-red-500" : "bg-gray-400"
             }`}
           />
           <span className="font-bold text-gray-900">
             {isCheckedIn
               ? "Checked in"
+              : isLocked
+              ? "Locked — GPS was turned off"
               : isCheckedOut
               ? `Checked out at ${new Date(todayAttendance!.check_out_time!).toLocaleTimeString([], {
                   hour: "2-digit",
@@ -146,7 +153,7 @@ export function CheckInPanel() {
               : "Not checked in"}
           </span>
         </div>
-        {!isCheckedIn && !isCheckedOut && !checkingInOpen && (
+        {!isCheckedIn && !isCheckedOut && !isLocked && !checkingInOpen && (
           <button
             onClick={openCheckIn}
             className="rounded-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold px-4 py-2 shrink-0"
@@ -164,6 +171,12 @@ export function CheckInPanel() {
           </button>
         )}
       </div>
+
+      {isLocked && (
+        <p className="text-sm text-red-600 mt-2">
+          Ask your supervisor to unlock check-in before you can check in again.
+        </p>
+      )}
 
       {error && <p className="text-sm text-red-600 mt-2">{error}</p>}
 

@@ -22,6 +22,9 @@
 --     cloth_limit / cloth_exchanges)
 --   - supabase_supervisor_ops_migration.sql (had v4, missing issues.category
 --     / issues.item_name for supervisor incident reports)
+--   - supabase_washer_ops_migration.sql (had v5, missing vehicle_type /
+--     payment_* on jobs, gps_unlock_approved_at on attendance, and the
+--     cloth_units table)
 -- ============================================================
 
 create extension if not exists "pgcrypto";
@@ -64,6 +67,18 @@ create table if not exists jobs (
   -- No UI in this app sets this yet — exists so the column is real and
   -- ready for whatever system does set it.
   is_urgent boolean not null default false,
+  -- Weighting for the daily unit quota (4-wheeler=1.0, 2-wheeler=0.4,
+  -- add-on=0.5), matching the ERP's real incentive-engine unit counts —
+  -- this app only counts units from this, it doesn't compute payouts.
+  vehicle_type text not null default '4w' check (vehicle_type in ('4w', '2w', 'addon')),
+  -- Doorstep payment collection, logged by the washer using their own
+  -- existing collection method (UPI/cash/link) — no payment gateway is
+  -- integrated here, this just records what happened.
+  payment_required boolean not null default false,
+  payment_amount numeric,
+  payment_method text check (payment_method in ('cash', 'upi', 'link')),
+  payment_reference text,
+  payment_collected_at timestamptz,
   job_date date not null default current_date,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
@@ -84,6 +99,10 @@ create table if not exists attendance (
   -- Set the moment a checked-in washer's location access is lost/revoked
   -- mid-shift — what the auto-logout-with-notification flow watches for.
   gps_lost_at timestamptz,
+  -- Once gps_lost_at is set, re-check-in stays locked until a supervisor
+  -- sets this (their "Unlock Check-In" action) — a scaled-down version
+  -- of the ERP's City-Manager GPS-violation approval.
+  gps_unlock_approved_at timestamptz,
   created_at timestamptz default now(),
   unique (washer_id, date)
 );
@@ -162,6 +181,19 @@ create table if not exists cloth_exchanges (
   created_at timestamptz default now()
 );
 
+-- Individual barcode-tracked cloths, alongside (not replacing) the
+-- aggregate cloth_exchanges hand-over above. A cloth's washer_id is who
+-- currently holds it (null = back in central inventory).
+create table if not exists cloth_units (
+  id uuid primary key default gen_random_uuid(),
+  barcode text not null unique,
+  washer_id uuid references profiles(id) on delete set null,
+  state text not null default 'clean' check (state in ('clean', 'dirty', 'locked', 'expired')),
+  wash_count int not null default 0,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
 -- ── Row Level Security — open to the anon key ───────────────────
 -- No login means no auth.uid() to scope by, so every policy here is a
 -- flat "yes" for anyone holding the anon key. See the file header for
@@ -177,6 +209,7 @@ alter table audits enable row level security;
 alter table alerts enable row level security;
 alter table job_photos enable row level security;
 alter table cloth_exchanges enable row level security;
+alter table cloth_units enable row level security;
 
 create policy "anon_all_profiles"   on profiles      for all to anon using (true) with check (true);
 create policy "anon_all_jobs"       on jobs          for all to anon using (true) with check (true);
@@ -188,6 +221,7 @@ create policy "anon_all_audits"     on audits         for all to anon using (tru
 create policy "anon_all_alerts"     on alerts         for all to anon using (true) with check (true);
 create policy "anon_all_job_photos" on job_photos     for all to anon using (true) with check (true);
 create policy "anon_all_cloth_exchanges" on cloth_exchanges for all to anon using (true) with check (true);
+create policy "anon_all_cloth_units" on cloth_units for all to anon using (true) with check (true);
 
 -- Storage: a public bucket for check-in selfies + job proof-of-work photos.
 insert into storage.buckets (id, name, public)
@@ -207,6 +241,8 @@ create index if not exists idx_payouts_washer on payouts(washer_id, payout_date 
 create index if not exists idx_audits_washer on audits(washer_id);
 create index if not exists idx_job_photos_job on job_photos(job_id);
 create index if not exists idx_cloth_exchanges_washer on cloth_exchanges(washer_id, created_at desc);
+create index if not exists idx_cloth_units_washer on cloth_units(washer_id);
+create index if not exists idx_cloth_units_barcode on cloth_units(barcode);
 
 -- ── Seed the two people the app needs to show something real ───
 -- Same names as the reference prototype. Safe to run more than once.
@@ -218,5 +254,8 @@ insert into profiles (full_name, role, zone)
 select 'Priya Sharma', 'supervisor', 'Zone 4'
 where not exists (select 1 from profiles where full_name = 'Priya Sharma');
 
--- Done: 10 tables, 10 RLS policies, 1 storage bucket, 7 indexes, 2 seeded profiles.
--- (issues.category / issues.item_name added for supervisor incident reports.)
+-- Done: 11 tables, 11 RLS policies, 1 storage bucket, 9 indexes, 2 seeded profiles.
+-- (issues.category / issues.item_name added for supervisor incident reports.
+--  jobs.vehicle_type / payment_* , attendance.gps_unlock_approved_at, and
+--  cloth_units added for washer-side weighted units / payments / cloth
+--  tracking / GPS-lockout unlock.)

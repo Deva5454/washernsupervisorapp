@@ -3,7 +3,13 @@ import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Navigation, Phone, Camera, Check } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { uploadPhoto } from "../../lib/uploadPhoto";
-import type { ExecutionStage, Job, JobPhoto, PhotoDirection, PhotoPhase } from "../../lib/types";
+import type { ExecutionStage, Job, JobPhoto, PaymentMethod, PhotoDirection, PhotoPhase } from "../../lib/types";
+
+const PAYMENT_METHOD_LABEL: Record<PaymentMethod, string> = {
+  cash: "Cash",
+  upi: "UPI",
+  link: "Send Link",
+};
 
 const STAGES: { key: ExecutionStage; label: string }[] = [
   { key: "assigned", label: "Assigned" },
@@ -115,6 +121,11 @@ export default function ActiveWash() {
   const [uploadingKey, setUploadingKey] = useState<string | null>(null);
   const [showBeforePhotos, setShowBeforePhotos] = useState(false);
 
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(null);
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const [paymentReference, setPaymentReference] = useState("");
+  const [paymentBusy, setPaymentBusy] = useState(false);
+
   useEffect(() => {
     if (!jobId) return;
     load();
@@ -203,6 +214,32 @@ export default function ActiveWash() {
     }
   }
 
+  // Logs how payment was collected using the washer's own existing
+  // collection method (their own UPI QR/number, cash, or a link they
+  // send themselves) — no payment gateway is integrated here, this is
+  // purely a record of what happened.
+  async function collectPayment() {
+    if (!job || !paymentMethod) return;
+    setPaymentBusy(true);
+    setError(null);
+    try {
+      const update = {
+        payment_method: paymentMethod,
+        payment_amount: paymentAmount ? Number(paymentAmount) : null,
+        payment_reference: paymentReference.trim() || null,
+        payment_collected_at: new Date().toISOString(),
+      };
+      const { error } = await supabase.from("jobs").update(update).eq("id", job.id);
+      if (error) throw error;
+      setJob({ ...job, ...update });
+    } catch (err) {
+      console.error(err);
+      setError("Could not record payment. Please try again.");
+    } finally {
+      setPaymentBusy(false);
+    }
+  }
+
   async function completeJob() {
     if (!job) return;
     setAdvancing(true);
@@ -227,6 +264,7 @@ export default function ActiveWash() {
   }
 
   const requiredPhotosDone = REQUIRED_DIRECTIONS.every((d) => photoFor("after", d));
+  const paymentDone = !job?.payment_required || !!job?.payment_collected_at;
 
   if (loading) {
     return <div className="text-center text-gray-400">Loading…</div>;
@@ -362,16 +400,78 @@ export default function ActiveWash() {
             </div>
           )}
 
+          {job.payment_required && (
+            <div className="rounded-2xl bg-gray-100 p-4 space-y-3">
+              <p className="text-xs font-bold text-gray-900 uppercase tracking-wide">
+                Collect Payment
+              </p>
+              {job.payment_collected_at ? (
+                <p className="flex items-center gap-2 text-sm font-bold text-green-700">
+                  <Check className="h-4 w-4" />
+                  {PAYMENT_METHOD_LABEL[job.payment_method!]} collected
+                  {job.payment_amount ? ` · ₹${job.payment_amount}` : ""}
+                </p>
+              ) : (
+                <>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(Object.keys(PAYMENT_METHOD_LABEL) as PaymentMethod[]).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setPaymentMethod(m)}
+                        className={`rounded-xl py-2.5 text-sm font-bold ${
+                          paymentMethod === m ? "bg-blue-600 text-white" : "bg-white text-gray-700 border border-gray-200"
+                        }`}
+                      >
+                        {PAYMENT_METHOD_LABEL[m]}
+                      </button>
+                    ))}
+                  </div>
+                  {paymentMethod && (
+                    <>
+                      <input
+                        type="number"
+                        inputMode="decimal"
+                        value={paymentAmount}
+                        onChange={(e) => setPaymentAmount(e.target.value)}
+                        placeholder="Amount collected (₹)"
+                        className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-600"
+                      />
+                      {paymentMethod === "upi" && (
+                        <input
+                          type="text"
+                          value={paymentReference}
+                          onChange={(e) => setPaymentReference(e.target.value)}
+                          placeholder="UPI reference / transaction ID (optional)"
+                          className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-600"
+                        />
+                      )}
+                      <button
+                        onClick={collectPayment}
+                        disabled={!paymentAmount || paymentBusy}
+                        className="w-full rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold py-2.5"
+                      >
+                        {paymentBusy ? "Saving…" : "Confirm Payment Collected"}
+                      </button>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
           <button
             onClick={completeJob}
-            disabled={!requiredPhotosDone || advancing}
+            disabled={!requiredPhotosDone || !paymentDone || advancing}
             className="w-full h-14 rounded-2xl bg-green-600 hover:bg-green-700 disabled:opacity-40 text-white font-bold"
           >
             {advancing
               ? "Saving…"
-              : requiredPhotosDone
-              ? "Mark Job Complete"
-              : "Capture all 4 photos to complete"}
+              : !requiredPhotosDone
+              ? "Capture all 4 photos to complete"
+              : !paymentDone
+              ? "Collect payment to complete"
+              : "Mark Job Complete"}
           </button>
         </div>
       )}

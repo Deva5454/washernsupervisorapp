@@ -4,6 +4,7 @@ import { CalendarDays, Package, MessageSquare } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabase";
 import { CheckInPanel } from "../../components/CheckInPanel";
+import { DAILY_UNIT_TARGET, formatUnits, weightedUnits } from "../../lib/incentive";
 
 function getGreeting() {
   const hour = new Date().getHours();
@@ -27,6 +28,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [totalJobs, setTotalJobs] = useState(0);
   const [doneJobs, setDoneJobs] = useState(0);
+  const [unitsToday, setUnitsToday] = useState(0);
   const [weekTotal, setWeekTotal] = useState(0);
 
   useEffect(() => {
@@ -43,7 +45,11 @@ export default function Home() {
           .slice(0, 10);
 
         const [jobsRes, payoutsRes] = await Promise.all([
-          supabase.from("jobs").select("status").eq("washer_id", profile!.id).eq("job_date", today),
+          supabase
+            .from("jobs")
+            .select("status, vehicle_type")
+            .eq("washer_id", profile!.id)
+            .eq("job_date", today),
           supabase
             .from("payouts")
             .select("amount")
@@ -58,7 +64,9 @@ export default function Home() {
 
         const jobs = jobsRes.data ?? [];
         setTotalJobs(jobs.length);
-        setDoneJobs(jobs.filter((j) => j.status === "done").length);
+        const done = jobs.filter((j) => j.status === "done");
+        setDoneJobs(done.length);
+        setUnitsToday(weightedUnits(done));
         const sum = (payoutsRes.data ?? []).reduce((acc, p) => acc + Number(p.amount), 0);
         setWeekTotal(sum);
       } catch (err) {
@@ -108,6 +116,15 @@ export default function Home() {
         <p className="text-3xl font-extrabold mt-1">
           {doneJobs} of {totalJobs} washes done
         </p>
+        <p className="text-sm text-white/60 mt-1">
+          {formatUnits(unitsToday)} / {DAILY_UNIT_TARGET} daily quota units
+        </p>
+        <div className="mt-3 h-1.5 rounded-full bg-white/15 overflow-hidden">
+          <div
+            className="h-full bg-blue-400 rounded-full"
+            style={{ width: `${Math.min(100, (unitsToday / DAILY_UNIT_TARGET) * 100)}%` }}
+          />
+        </div>
         <div className="mt-4 pt-4 border-t border-white/10 flex items-center justify-between">
           <span className="text-sm text-white/60">Last 7 days earnings</span>
           <span className="text-lg font-bold">₹{weekTotal.toLocaleString("en-IN")}</span>
