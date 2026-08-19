@@ -1,6 +1,6 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { supabase } from "../lib/supabase";
-import type { Profile, Role } from "../lib/types";
+import type { AttendanceRecord, Profile, Role } from "../lib/types";
 
 // No-login mode: there is no sign-in step at all. The app picks whichever
 // washer/supervisor profile exists in Supabase and shows that person's
@@ -8,13 +8,18 @@ import type { Profile, Role } from "../lib/types";
 // toggle (persisted in localStorage), not an authentication change. This
 // means EVERY visitor with the app's URL sees and can edit that same
 // data (Supabase RLS must be opened up to the anon key for this to work
-// at all — see supabase_schema_no_auth.sql). Fine for a small internal
+// at all — see supabase_schema.sql). Fine for a small internal
 // single-team tool; not appropriate if different washers/supervisors
 // need their own private accounts.
 //
 // A real Supabase Auth user (created in the dashboard) still has to
 // exist for each role, because `profiles.id` is a foreign key into
-// `auth.users` — the app just never asks anyone to sign into it.
+// `auth.users`... actually it isn't anymore (see supabase_no_login_migration.sql)
+// — profiles are plain rows now, nothing to sign into.
+//
+// This context also owns "is the active washer checked in right now,"
+// since that has to be known app-wide (not just on the Home screen) to
+// drive the GPS-loss auto-logout watcher below.
 
 interface AuthContextValue {
   profile: Profile | null;
@@ -22,6 +27,10 @@ interface AuthContextValue {
   role: Role;
   switchRole: (role: Role) => void;
   signOut: () => Promise<void>;
+  todayAttendance: AttendanceRecord | null;
+  refreshAttendance: () => Promise<void>;
+  gpsLostNotice: string | null;
+  dismissGpsLostNotice: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -32,10 +41,17 @@ function initialRole(): Role {
   return stored === "supervisor" ? "supervisor" : "washer";
 }
 
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [role, setRole] = useState<Role>(initialRole);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [todayAttendance, setTodayAttendance] = useState<AttendanceRecord | null>(null);
+  const [gpsLostNotice, setGpsLostNotice] = useState<string | null>(null);
+  const watchIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -59,9 +75,83 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [role]);
 
-  function switchRole(newRole: Role) {
-    localStorage.setItem(ROLE_KEY, newRole);
-    setRole(newRole);
+  async function loadAttendance(washerId: string) {
+    const { data } = await supabase
+      .from("attendance")
+      .select("*")
+      .eq("washer_id", washerId)
+      .eq("date", todayISO())
+      .maybeSingle();
+    setTodayAttendance((data as AttendanceRecord) ?? null);
+  }
+
+  async function refreshAttendance() {
+    if (profile?.role === "washer") await loadAttendance(profile.id);
+  }
+
+  useEffect(() => {
+    if (profile?.role === "washer") {
+      loadAttendance(profile.id);
+    } else {
+      setTodayAttendance(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.id, profile?.role]);
+
+  // GPS-loss auto-logout: while checked in (present/late today, not
+  // already logged out by a prior GPS loss), keep watching position. If
+  // access is revoked mid-shift, mark the attendance row logged-out and
+  // surface a real, visible notice — never a silent logout.
+  useEffect(() => {
+    const isCheckedIn =
+      profile?.role === "washer" &&
+      todayAttendance &&
+      (todayAttendance.status === "present" || todayAttendance.status === "late") &&
+      !todayAttendance.gps_lost_at;
+
+    function clearWatch() {
+      if (watchIdRef.current !== null && "geolocation" in navigator) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
+    }
+
+    if (!isCheckedIn || !("geolocation" in navigator)) {
+      clearWatch();
+      return;
+    }
+
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      () => {
+        // Position updates aren't otherwise used — this watch exists to
+        // detect permission loss via its error callback below.
+      },
+      async (err) => {
+        if (err.code !== err.PERMISSION_DENIED) return; // transient GPS errors aren't a logout
+        clearWatch();
+        try {
+          await supabase
+            .from("attendance")
+            .update({ gps_lost_at: new Date().toISOString() })
+            .eq("id", todayAttendance!.id);
+        } catch (e) {
+          console.error("Failed to record GPS loss", e);
+        }
+        setGpsLostNotice(
+          "Your location was turned off, so you've been logged out. Turn location back on and check in again from Home."
+        );
+        if (profile) await loadAttendance(profile.id);
+      },
+      { enableHighAccuracy: false, maximumAge: 60000 }
+    );
+
+    return clearWatch;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.id, profile?.role, todayAttendance?.status, todayAttendance?.gps_lost_at]);
+
+  function switchRole(next: Role) {
+    localStorage.setItem(ROLE_KEY, next);
+    setRole(next);
   }
 
   async function signOut() {
@@ -69,8 +159,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Out" buttons elsewhere don't need to change.
   }
 
+  function dismissGpsLostNotice() {
+    setGpsLostNotice(null);
+  }
+
   return (
-    <AuthContext.Provider value={{ profile, loading, role, switchRole, signOut }}>
+    <AuthContext.Provider
+      value={{
+        profile,
+        loading,
+        role,
+        switchRole,
+        signOut,
+        todayAttendance,
+        refreshAttendance,
+        gpsLostNotice,
+        dismissGpsLostNotice,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

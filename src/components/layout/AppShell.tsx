@@ -1,6 +1,6 @@
 import { type ReactNode } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { Bell, Home, CalendarDays, Wallet, Package, MoreHorizontal, LayoutGrid, ClipboardCheck, AlertTriangle, TrendingUp } from "lucide-react";
+import { Bell, Home, CalendarDays, Wallet, Package, MoreHorizontal, LayoutGrid, ClipboardCheck, AlertTriangle, TrendingUp, X } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import type { Role } from "../../lib/types";
 
@@ -27,7 +27,7 @@ const supervisorNav: NavItem[] = [
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const { role, switchRole } = useAuth();
+  const { role, switchRole, gpsLostNotice, dismissGpsLostNotice } = useAuth();
   const navigate = useNavigate();
   const nav = role === "supervisor" ? supervisorNav : washerNav;
 
@@ -74,6 +74,15 @@ export function AppShell({ children }: { children: ReactNode }) {
             </button>
           </div>
         </div>
+
+        {gpsLostNotice && (
+          <div className="mx-4 mt-4 rounded-2xl bg-red-50 border border-red-200 px-4 py-3 flex items-start gap-2">
+            <p className="text-sm text-red-700 flex-1">{gpsLostNotice}</p>
+            <button onClick={dismissGpsLostNotice} aria-label="Dismiss">
+              <X className="h-4 w-4 text-red-400" />
+            </button>
+          </div>
+        )}
 
         <div className="pb-24">{children}</div>
       </div>

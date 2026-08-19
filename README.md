@@ -23,11 +23,14 @@ means and trades away.
      seeds the two profiles above.
    - Grab your **Project URL** and **anon/public key** from
      Settings → API.
-   - Already ran the *old* version of this schema (the one that tied
-     profiles to a Supabase Auth account) against this project? Run
-     `supabase_no_login_migration.sql` instead — `supabase_schema.sql`'s
-     `create table if not exists` won't retroactively fix an
-     already-created table.
+   - Already have a project running an earlier version of this schema?
+     Run the matching migration instead of the full file:
+     - Had the old auth-tied `profiles` → `supabase_no_login_migration.sql`
+     - Had no-login but no Active Wash tables/columns yet →
+       `supabase_active_wash_migration.sql`
+     `supabase_schema.sql`'s `create table if not exists` /
+     `add column if not exists` won't retroactively fix an
+     already-created table in every case.
 
 2. **Local development**
    ```bash
@@ -64,9 +67,43 @@ known, reversible path if you ever need it.
 
 See `supabase_schema.sql` for the full schema. In short: `profiles` (one
 row per person, `role` is `washer` or `supervisor`), `jobs`,
-`attendance`, `stock_items`, `payouts`, `issues`, `audits`, `alerts`.
+`attendance`, `stock_items`, `payouts`, `issues`, `audits`, `alerts`,
+`job_photos`.
 
 Beyond the two seeded profiles, there's no other seed/demo data — every
 screen reads real rows from these tables, so a fresh project will show
 empty jobs/stock/earnings lists until you add some (either by hand in
 the Supabase Table Editor, or by building out an admin flow later).
+
+## Active Wash flow
+
+Starting a job (Jobs tab → Start) opens a real in-progress flow, not
+just a status badge:
+
+- A 5-stage stepper (Assigned → En Route → Arrived → Washing → Done) the
+  washer advances through.
+- **En Route**: a "Navigate" button opens Google Maps directions to the
+  job's address; "Call" opens a direct `tel:` link to `jobs.customer_phone`
+  when set. There is **no number masking** — the app shows/dials the real
+  number as-is. If you want washer↔customer calls to go through a masked
+  number instead (neither side sees the other's real number), that's a
+  telephony-provider integration (Exotel/Knowlarity-style) that has to be
+  wired in separately; the `tel:` link in `ActiveWash.tsx` is the single
+  place to swap for that provider's call-initiation API once you have one.
+- **Washing**: 4 required proof-of-work photos (front/back/left/right,
+  captured via the phone's camera), plus an optional 4 more before-photos
+  in the same 4 directions. "Mark Job Complete" is disabled until the 4
+  required photos exist.
+
+Check-in (Home tab) requires a real selfie and a real GPS fix — both are
+stored on the `attendance` row (`selfie_url`, `gps_lat`, `gps_lng`). If a
+checked-in washer's location access gets turned off, the app detects
+that automatically, records `attendance.gps_lost_at`, logs them out, and
+shows a visible in-app notice explaining why — never a silent logout.
+Checking in again later the same day updates that same attendance row
+(one per washer per day) and clears `gps_lost_at`.
+
+Camera and location capture use the browser's native `<input capture>`
+and Geolocation APIs — no extra SDK, but both require the browser to
+have camera/location permission, and only work over HTTPS (Vercel's
+deployment is HTTPS by default; `localhost` also works for local dev).

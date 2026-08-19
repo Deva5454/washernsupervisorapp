@@ -11,6 +11,7 @@ export interface Profile {
 }
 
 export type JobStatus = "pending" | "in_progress" | "done" | "issue";
+export type ExecutionStage = "assigned" | "en_route" | "arrived" | "washing" | "done";
 
 export interface Job {
   id: string;
@@ -18,16 +19,30 @@ export interface Job {
   sequence_number: number;
   scheduled_time: string;
   customer_name: string;
+  customer_phone: string | null;
   vehicle_make: string;
   vehicle_reg: string;
   package_name: string;
   area: string;
   city: string;
   status: JobStatus;
+  execution_stage: ExecutionStage;
   is_cover: boolean;
   job_date: string;
   created_at: string;
   updated_at: string;
+}
+
+export type PhotoPhase = "before" | "after";
+export type PhotoDirection = "front" | "back" | "left" | "right";
+
+export interface JobPhoto {
+  id: string;
+  job_id: string;
+  phase: PhotoPhase;
+  direction: PhotoDirection;
+  photo_url: string;
+  created_at: string;
 }
 
 export type AttendanceStatus = "present" | "absent" | "late" | "week_off";
@@ -39,6 +54,10 @@ export interface AttendanceRecord {
   status: AttendanceStatus;
   check_in_time: string | null;
   check_out_time: string | null;
+  selfie_url: string | null;
+  gps_lat: number | null;
+  gps_lng: number | null;
+  gps_lost_at: string | null;
   created_at: string;
 }
 

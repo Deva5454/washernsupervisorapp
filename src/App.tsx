@@ -4,6 +4,7 @@ import { AppShell } from "./components/layout/AppShell";
 
 import WasherHome from "./pages/washer/Home";
 import WasherJobs from "./pages/washer/Jobs";
+import ActiveWash from "./pages/washer/ActiveWash";
 import WasherEarnings from "./pages/washer/Earnings";
 import WasherStock from "./pages/washer/Stock";
 import WasherMore from "./pages/washer/More";
@@ -45,6 +46,7 @@ export default function App() {
 
           <Route path="/washer" element={<Gate><WasherHome /></Gate>} />
           <Route path="/washer/jobs" element={<Gate><WasherJobs /></Gate>} />
+          <Route path="/washer/active-wash/:jobId" element={<Gate><ActiveWash /></Gate>} />
           <Route path="/washer/earnings" element={<Gate><WasherEarnings /></Gate>} />
           <Route path="/washer/stock" element={<Gate><WasherStock /></Gate>} />
           <Route path="/washer/more" element={<Gate><WasherMore /></Gate>} />
