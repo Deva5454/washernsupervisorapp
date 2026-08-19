@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
 import { CheckInPanel } from "../../components/CheckInPanel";
@@ -50,6 +50,7 @@ export default function Dashboard() {
   const [assigningJobId, setAssigningJobId] = useState<string | null>(null);
   const [selectedWasherId, setSelectedWasherId] = useState("");
   const [assignBusy, setAssignBusy] = useState(false);
+  const teamStatusRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!profile) return;
@@ -108,6 +109,9 @@ export default function Dashboard() {
     }
   }
 
+  // Also used to override an already-assigned job to a different washer,
+  // not just to fill in an unassigned one — so this always re-fetches
+  // (loadAll) rather than patching one local array in place.
   async function confirmAssign(jobId: string) {
     if (!selectedWasherId) return;
     setAssignBusy(true);
@@ -117,9 +121,9 @@ export default function Dashboard() {
         .update({ washer_id: selectedWasherId })
         .eq("id", jobId);
       if (updateErr) throw updateErr;
-      setUnassignedJobs((prev) => prev.filter((j) => j.id !== jobId));
       setAssigningJobId(null);
       setSelectedWasherId("");
+      await loadAll();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to assign job.");
     } finally {
@@ -135,6 +139,12 @@ export default function Dashboard() {
     : 0;
 
   const attendanceByWasher = new Map(attendanceToday.map((a) => [a.washer_id, a]));
+  const rosterById = new Map(roster.map((w) => [w.id, w]));
+  // teamJobsToday (washer_id in roster) and unassignedJobs (washer_id is
+  // null) are disjoint by construction, so this union needs no dedup.
+  const allJobsToday = [...teamJobsToday, ...unassignedJobs].sort((a, b) =>
+    a.scheduled_time.localeCompare(b.scheduled_time)
+  );
 
   if (loading) {
     return <p className="text-gray-400 text-sm">Loading dashboard…</p>;
@@ -160,10 +170,16 @@ export default function Dashboard() {
       <CheckInPanel />
 
       <div className="grid grid-cols-3 gap-3">
-        <div className="bg-gray-100 rounded-2xl py-5 text-center">
-          <p className="text-3xl font-extrabold text-blue-600">{onDutyCount}</p>
+        <button
+          onClick={() => teamStatusRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+          className="bg-gray-100 rounded-2xl py-5 text-center"
+        >
+          <p className="text-3xl font-extrabold text-blue-600">
+            {onDutyCount}
+            <span className="text-lg text-gray-400">/{roster.length}</span>
+          </p>
           <p className="text-xs text-gray-500 mt-1">On Duty</p>
-        </div>
+        </button>
         <div className="bg-gray-100 rounded-2xl py-5 text-center">
           <p className="text-3xl font-extrabold text-gray-900">{absentCount}</p>
           <p className="text-xs text-gray-500 mt-1">Absent</p>
@@ -190,73 +206,83 @@ export default function Dashboard() {
 
       <div>
         <h2 className="text-sm font-extrabold text-gray-900 tracking-wide mb-3">
-          JOB QUEUE · UNASSIGNED
+          JOB QUEUE · TODAY
         </h2>
-        {unassignedJobs.length === 0 ? (
+        {allJobsToday.length === 0 ? (
           <p className="text-sm text-gray-400 bg-gray-100 rounded-2xl px-4 py-4">
-            No unassigned jobs today.
+            No jobs scheduled today.
           </p>
         ) : (
           <div className="space-y-3">
-            {unassignedJobs.map((job) => (
-              <div key={job.id} className="bg-gray-100 rounded-2xl px-4 py-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="font-extrabold text-gray-900">
-                      {job.vehicle_make} · {job.vehicle_reg}
-                    </p>
-                    <p className="text-sm text-gray-500 mt-0.5">
-                      {job.area} · {job.scheduled_time}
-                    </p>
+            {allJobsToday.map((job) => {
+              const assignedWasher = job.washer_id ? rosterById.get(job.washer_id) : undefined;
+              return (
+                <div key={job.id} className="bg-gray-100 rounded-2xl px-4 py-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="font-extrabold text-gray-900">
+                        {job.vehicle_make} · {job.vehicle_reg}
+                      </p>
+                      <p className="text-sm text-gray-500 mt-0.5">
+                        {job.area} · {job.scheduled_time}
+                      </p>
+                      <p
+                        className={`text-xs font-bold mt-1 ${
+                          assignedWasher ? "text-blue-600" : "text-gray-400"
+                        }`}
+                      >
+                        {assignedWasher ? assignedWasher.full_name : "Unassigned"}
+                      </p>
+                    </div>
+                    {assigningJobId !== job.id && (
+                      <button
+                        onClick={() => {
+                          setAssigningJobId(job.id);
+                          setSelectedWasherId(job.washer_id ?? "");
+                        }}
+                        className="flex-shrink-0 rounded-full border border-gray-300 px-4 py-2 text-sm font-bold text-gray-900"
+                      >
+                        {assignedWasher ? "Override" : "Assign"}
+                      </button>
+                    )}
                   </div>
-                  {assigningJobId !== job.id && (
-                    <button
-                      onClick={() => {
-                        setAssigningJobId(job.id);
-                        setSelectedWasherId("");
-                      }}
-                      className="flex-shrink-0 rounded-full border border-gray-300 px-4 py-2 text-sm font-bold text-gray-900"
-                    >
-                      Assign
-                    </button>
+                  {assigningJobId === job.id && (
+                    <div className="mt-3 flex items-center gap-2">
+                      <select
+                        value={selectedWasherId}
+                        onChange={(e) => setSelectedWasherId(e.target.value)}
+                        className="flex-1 rounded-xl border border-gray-300 px-3 py-2 text-sm bg-white"
+                      >
+                        <option value="">Select washer…</option>
+                        {roster.map((w) => (
+                          <option key={w.id} value={w.id}>
+                            {w.full_name}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={() => confirmAssign(job.id)}
+                        disabled={!selectedWasherId || assignBusy}
+                        className="rounded-full bg-blue-600 disabled:opacity-50 text-white px-4 py-2 text-sm font-bold"
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        onClick={() => setAssigningJobId(null)}
+                        className="text-sm text-gray-500 font-medium px-2"
+                      >
+                        Cancel
+                      </button>
+                    </div>
                   )}
                 </div>
-                {assigningJobId === job.id && (
-                  <div className="mt-3 flex items-center gap-2">
-                    <select
-                      value={selectedWasherId}
-                      onChange={(e) => setSelectedWasherId(e.target.value)}
-                      className="flex-1 rounded-xl border border-gray-300 px-3 py-2 text-sm bg-white"
-                    >
-                      <option value="">Select washer…</option>
-                      {roster.map((w) => (
-                        <option key={w.id} value={w.id}>
-                          {w.full_name}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      onClick={() => confirmAssign(job.id)}
-                      disabled={!selectedWasherId || assignBusy}
-                      className="rounded-full bg-blue-600 disabled:opacity-50 text-white px-4 py-2 text-sm font-bold"
-                    >
-                      Confirm
-                    </button>
-                    <button
-                      onClick={() => setAssigningJobId(null)}
-                      className="text-sm text-gray-500 font-medium px-2"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
 
-      <div>
+      <div ref={teamStatusRef}>
         <h2 className="text-sm font-extrabold text-gray-900 tracking-wide mb-3">TEAM STATUS</h2>
         {roster.length === 0 ? (
           <p className="text-sm text-gray-400 bg-gray-100 rounded-2xl px-4 py-4">
