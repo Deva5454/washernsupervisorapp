@@ -229,16 +229,16 @@ export default function ActiveWash() {
   const requiredPhotosDone = REQUIRED_DIRECTIONS.every((d) => photoFor("after", d));
 
   if (loading) {
-    return <div className="px-4 pt-6 text-center text-gray-400">Loading…</div>;
+    return <div className="text-center text-gray-400">Loading…</div>;
   }
   if (!job) {
-    return <div className="px-4 pt-6 text-center text-gray-400">Job not found.</div>;
+    return <div className="text-center text-gray-400">Job not found.</div>;
   }
 
   const destination = encodeURIComponent(`${job.area}, ${job.city}`);
 
   return (
-    <div className="px-4 pt-6 pb-4 space-y-4">
+    <div className="pb-4 space-y-4">
       <div className="flex items-center gap-2">
         <button onClick={() => navigate("/washer/jobs")} aria-label="Back">
           <ArrowLeft className="h-5 w-5 text-gray-700" />

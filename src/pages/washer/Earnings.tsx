@@ -70,11 +70,11 @@ export default function Earnings() {
   if (!profile) return null;
 
   if (loading) {
-    return <div className="px-4 pt-6 text-center text-gray-400">Loading…</div>;
+    return <div className="text-center text-gray-400">Loading…</div>;
   }
 
   return (
-    <div className="px-4 pt-6 pb-4 space-y-5">
+    <div className="pb-4 space-y-5">
       <h1 className="text-2xl font-extrabold text-gray-900">Earnings & Incentives</h1>
 
       {error && (

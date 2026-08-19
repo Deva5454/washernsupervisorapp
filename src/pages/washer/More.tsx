@@ -230,7 +230,7 @@ export default function More() {
   }
 
   return (
-    <div className="px-4 pt-6 pb-4">
+    <div className="pb-4">
       <h1 className="text-2xl font-extrabold text-gray-900 mb-4">More</h1>
       <div className="rounded-2xl bg-gray-100 divide-y divide-gray-200 overflow-hidden">
         <MenuRow

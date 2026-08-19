@@ -92,7 +92,11 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         )}
 
-        <div className="pb-24">{children}</div>
+        {/* Padding lives here, once, so every page (washer or
+            supervisor) gets consistent edge spacing automatically —
+            individual pages no longer need to remember their own
+            px-4/pt-6. */}
+        <div className="px-4 pt-6 pb-24">{children}</div>
       </div>
 
       {/* Bottom nav — its own fixed bar spanning the real viewport (not

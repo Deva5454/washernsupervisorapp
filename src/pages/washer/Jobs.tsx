@@ -144,7 +144,7 @@ export default function Jobs() {
   if (!profile) return null;
 
   if (loading) {
-    return <div className="px-4 pt-6 text-center text-gray-400">Loading…</div>;
+    return <div className="text-center text-gray-400">Loading…</div>;
   }
 
   const activeJobs = todayJobs.filter((j) => j.status === "in_progress");
@@ -167,7 +167,7 @@ export default function Jobs() {
   ];
 
   return (
-    <div className="px-4 pt-6 pb-4 space-y-4">
+    <div className="pb-4 space-y-4">
       <h1 className="text-2xl font-extrabold text-gray-900">My Schedule</h1>
 
       <div className="flex gap-2 overflow-x-auto">

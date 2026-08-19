@@ -78,11 +78,11 @@ export default function Home() {
   if (!profile) return null;
 
   if (loading) {
-    return <div className="px-4 pt-6 text-center text-gray-400">Loading…</div>;
+    return <div className="text-center text-gray-400">Loading…</div>;
   }
 
   return (
-    <div className="px-4 pt-6 pb-4 space-y-4">
+    <div className="pb-4 space-y-4">
       <div className="flex items-center gap-3">
         {profile.avatar_url ? (
           <img src={profile.avatar_url} alt="" className="h-14 w-14 rounded-full object-cover" />
