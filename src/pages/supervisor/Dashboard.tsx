@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { Phone } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
 import { CheckInPanel } from "../../components/CheckInPanel";
-import type { AttendanceRecord, Job, Profile } from "../../lib/types";
+import type { AttendanceRecord, AttendanceStatus, Job, Profile } from "../../lib/types";
 
 // Local-timezone "today" as a YYYY-MM-DD date string, matching the
 // Postgres `date` columns (job_date, attendance.date) exactly.
@@ -51,6 +52,16 @@ export default function Dashboard() {
   const [selectedWasherId, setSelectedWasherId] = useState("");
   const [assignBusy, setAssignBusy] = useState(false);
   const teamStatusRef = useRef<HTMLDivElement>(null);
+
+  const [editingAttendanceId, setEditingAttendanceId] = useState<string | null>(null);
+  const [attendanceBusyId, setAttendanceBusyId] = useState<string | null>(null);
+
+  // Cover redistribution: when a washer is marked absent, their
+  // undone jobs today can be handed to on-duty teammates in one panel
+  // rather than one-by-one through the Job Queue's Override control.
+  const [coverWasherId, setCoverWasherId] = useState<string | null>(null);
+  const [coverAssignments, setCoverAssignments] = useState<Record<string, string>>({});
+  const [coverBusy, setCoverBusy] = useState(false);
 
   useEffect(() => {
     if (!profile) return;
@@ -128,6 +139,76 @@ export default function Dashboard() {
       setError(e instanceof Error ? e.message : "Failed to assign job.");
     } finally {
       setAssignBusy(false);
+    }
+  }
+
+  // Manual attendance override — a supervisor correcting or setting a
+  // washer's status directly, independent of that washer's own
+  // check-in/out. No separate audit trail, matching the rest of this
+  // app's lightweight approach.
+  async function overrideAttendance(washerId: string, status: AttendanceStatus) {
+    setAttendanceBusyId(washerId);
+    setError(null);
+    try {
+      const { error: updateErr } = await supabase
+        .from("attendance")
+        .upsert({ washer_id: washerId, date: todayISO(), status }, { onConflict: "washer_id,date" });
+      if (updateErr) throw updateErr;
+      setEditingAttendanceId(null);
+      await loadAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update attendance.");
+    } finally {
+      setAttendanceBusyId(null);
+    }
+  }
+
+  function onDutyWashers(excludeWasherId: string) {
+    return roster.filter((w) => {
+      if (w.id === excludeWasherId) return false;
+      const status = attendanceByWasher.get(w.id)?.status;
+      return status === "present" || status === "late";
+    });
+  }
+
+  function jobsNeedingCover(washerId: string) {
+    return allJobsToday.filter((j) => j.washer_id === washerId && j.status !== "done");
+  }
+
+  function openCoverPanel(washerId: string) {
+    const jobs = jobsNeedingCover(washerId);
+    const onDuty = onDutyWashers(washerId);
+    const assignments: Record<string, string> = {};
+    jobs.forEach((job, i) => {
+      // Auto-suggest via round robin across on-duty teammates; the
+      // supervisor can still override any single job before confirming.
+      if (onDuty.length) assignments[job.id] = onDuty[i % onDuty.length].id;
+    });
+    setCoverAssignments(assignments);
+    setCoverWasherId(washerId);
+  }
+
+  async function confirmCover() {
+    const entries = Object.entries(coverAssignments).filter(([, washerId]) => washerId);
+    if (!entries.length) {
+      setCoverWasherId(null);
+      return;
+    }
+    setCoverBusy(true);
+    setError(null);
+    try {
+      const results = await Promise.all(
+        entries.map(([jobId, washerId]) => supabase.from("jobs").update({ washer_id: washerId }).eq("id", jobId))
+      );
+      const failed = results.find((r) => r.error);
+      if (failed?.error) throw failed.error;
+      setCoverWasherId(null);
+      setCoverAssignments({});
+      await loadAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to reassign jobs.");
+    } finally {
+      setCoverBusy(false);
     }
   }
 
@@ -292,20 +373,110 @@ export default function Dashboard() {
           <div className="space-y-2">
             {roster.map((w) => {
               const rec = attendanceByWasher.get(w.id);
+              const uncoveredJobs = jobsNeedingCover(w.id);
+              const isAbsent = rec?.status === "absent";
               return (
-                <div
-                  key={w.id}
-                  className="bg-gray-100 rounded-2xl px-4 py-3 flex items-center justify-between"
-                >
-                  <p className="font-bold text-gray-900">{w.full_name}</p>
-                  <span
-                    className={`text-xs font-bold px-3 py-1.5 rounded-full ${attendancePillClass(rec)}`}
-                  >
-                    {attendanceLabel(rec)}
-                  </span>
+                <div key={w.id} className="bg-gray-100 rounded-2xl px-4 py-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <p className="font-bold text-gray-900 truncate">{w.full_name}</p>
+                      {w.phone && (
+                        <a
+                          href={`tel:${w.phone}`}
+                          aria-label={`Call ${w.full_name}`}
+                          className="flex-shrink-0 h-7 w-7 rounded-full bg-white text-blue-600 flex items-center justify-center"
+                        >
+                          <Phone className="h-3.5 w-3.5" />
+                        </a>
+                      )}
+                    </div>
+                    {editingAttendanceId === w.id ? (
+                      <select
+                        autoFocus
+                        defaultValue={rec?.status ?? ""}
+                        onChange={(e) => overrideAttendance(w.id, e.target.value as AttendanceStatus)}
+                        onBlur={() => setEditingAttendanceId(null)}
+                        disabled={attendanceBusyId === w.id}
+                        className="flex-shrink-0 text-xs font-bold rounded-full border border-gray-300 px-2 py-1.5 bg-white"
+                      >
+                        <option value="" disabled>
+                          Set status…
+                        </option>
+                        <option value="present">Present</option>
+                        <option value="late">Late</option>
+                        <option value="absent">Absent</option>
+                        <option value="week_off">Week Off</option>
+                      </select>
+                    ) : (
+                      <button
+                        onClick={() => setEditingAttendanceId(w.id)}
+                        className={`flex-shrink-0 text-xs font-bold px-3 py-1.5 rounded-full ${attendancePillClass(rec)}`}
+                      >
+                        {attendanceBusyId === w.id ? "Saving…" : attendanceLabel(rec)}
+                      </button>
+                    )}
+                  </div>
+                  {isAbsent && uncoveredJobs.length > 0 && (
+                    <button
+                      onClick={() => openCoverPanel(w.id)}
+                      className="mt-2 w-full rounded-xl border border-blue-600 text-blue-600 text-xs font-bold py-2"
+                    >
+                      Cover {uncoveredJobs.length} job{uncoveredJobs.length === 1 ? "" : "s"}
+                    </button>
+                  )}
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {coverWasherId && (
+          <div className="mt-3 rounded-2xl bg-blue-50 border border-blue-200 p-4 space-y-3">
+            <p className="text-sm font-extrabold text-gray-900">
+              Reassign {rosterById.get(coverWasherId)?.full_name}'s jobs
+            </p>
+            {jobsNeedingCover(coverWasherId).map((job) => (
+              <div key={job.id} className="bg-white rounded-xl px-3 py-2">
+                <p className="text-sm font-bold text-gray-900">
+                  {job.vehicle_make} · {job.vehicle_reg}
+                </p>
+                <p className="text-xs text-gray-500 mb-1.5">
+                  {job.area} · {job.scheduled_time}
+                </p>
+                <select
+                  value={coverAssignments[job.id] ?? ""}
+                  onChange={(e) =>
+                    setCoverAssignments((prev) => ({ ...prev, [job.id]: e.target.value }))
+                  }
+                  className="w-full rounded-lg border border-gray-300 px-2 py-1.5 text-sm bg-white"
+                >
+                  <option value="">Leave unassigned</option>
+                  {onDutyWashers(coverWasherId).map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.full_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ))}
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  setCoverWasherId(null);
+                  setCoverAssignments({});
+                }}
+                className="flex-1 rounded-xl border border-gray-300 text-gray-700 font-bold py-2.5"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmCover}
+                disabled={coverBusy}
+                className="flex-1 rounded-xl bg-blue-600 disabled:opacity-50 text-white font-bold py-2.5"
+              >
+                {coverBusy ? "Reassigning…" : "Confirm Reassignment"}
+              </button>
+            </div>
           </div>
         )}
       </div>

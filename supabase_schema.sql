@@ -20,6 +20,8 @@
 --     Active Wash / job_photos / check-in-verification columns yet)
 --   - supabase_urgent_cloth_migration.sql (had v3, missing is_urgent /
 --     cloth_limit / cloth_exchanges)
+--   - supabase_supervisor_ops_migration.sql (had v4, missing issues.category
+--     / issues.item_name for supervisor incident reports)
 -- ============================================================
 
 create extension if not exists "pgcrypto";
@@ -123,6 +125,11 @@ create table if not exists issues (
   reported_by uuid not null references profiles(id) on delete cascade,
   title text not null,
   status text not null default 'open' check (status in ('open', 'resolved')),
+  -- category/item_name are optional structure for supervisor-filed
+  -- incident reports (broken part, lost/damaged bottle, repair request);
+  -- null for the plain free-text issues washers already report.
+  category text check (category is null or category in ('broken_part', 'lost_damaged_bottle', 'repair_request', 'other')),
+  item_name text,
   created_at timestamptz default now(),
   resolved_at timestamptz
 );
@@ -212,3 +219,4 @@ select 'Priya Sharma', 'supervisor', 'Zone 4'
 where not exists (select 1 from profiles where full_name = 'Priya Sharma');
 
 -- Done: 10 tables, 10 RLS policies, 1 storage bucket, 7 indexes, 2 seeded profiles.
+-- (issues.category / issues.item_name added for supervisor incident reports.)

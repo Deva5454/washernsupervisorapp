@@ -84,12 +84,15 @@ export interface Payout {
 }
 
 export type IssueStatus = "open" | "resolved";
+export type IssueCategory = "broken_part" | "lost_damaged_bottle" | "repair_request" | "other";
 
 export interface Issue {
   id: string;
   reported_by: string;
   title: string;
   status: IssueStatus;
+  category: IssueCategory | null;
+  item_name: string | null;
   created_at: string;
   resolved_at: string | null;
 }
