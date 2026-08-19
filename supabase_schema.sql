@@ -1,20 +1,28 @@
 -- ============================================================
--- CleanCar Field App — Supabase Schema v1
+-- CleanCar Field App — Supabase Schema v2 (no-login)
 -- Paste ENTIRE file into: Supabase Dashboard → SQL Editor → New Query → Run
 -- Expected: "Success. No rows returned."
+--
+-- This app has no login screen (see README.md's "Access model" section)
+-- — every request runs as the Supabase anon key, and profiles are plain
+-- rows with no tie to a Supabase Auth account. That means EVERY visitor
+-- with the app's URL can read and write EVERYONE's data. Deliberate
+-- tradeoff for a small internal single-team tool — not appropriate for
+-- sensitive per-employee data or multiple unrelated teams sharing one
+-- deployment.
+--
+-- Already ran the old (auth-tied) version of this schema and just want
+-- to fix an existing project instead of starting fresh? Run
+-- supabase_no_login_migration.sql instead — this file's `create table
+-- if not exists` won't retroactively change an already-created table.
 -- ============================================================
 
 create extension if not exists "pgcrypto";
 
 -- ── Tables ───────────────────────────────────────────────────
 
--- One row per app user, keyed to Supabase Auth's own user id. Created
--- automatically by the handle_new_user trigger below whenever someone
--- signs up — role/zone default to 'washer'/NULL and should be corrected
--- by a supervisor/admin afterwards (there is no self-service "sign up as
--- supervisor" — that would let anyone grant themselves the role).
 create table if not exists profiles (
-  id uuid primary key references auth.users(id) on delete cascade,
+  id uuid primary key default gen_random_uuid(),
   full_name text not null default 'New User',
   role text not null default 'washer' check (role in ('washer', 'supervisor')),
   phone text,
@@ -98,22 +106,10 @@ create table if not exists alerts (
   created_at timestamptz default now()
 );
 
--- ── Auto-create profile on signup ───────────────────────────────
-create or replace function handle_new_user()
-returns trigger as $$
-begin
-  insert into public.profiles (id, full_name)
-  values (new.id, coalesce(new.raw_user_meta_data->>'full_name', new.email));
-  return new;
-end;
-$$ language plpgsql security definer set search_path = public;
-
-drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute procedure handle_new_user();
-
--- ── Row Level Security ────────────────────────────────────────
+-- ── Row Level Security — open to the anon key ───────────────────
+-- No login means no auth.uid() to scope by, so every policy here is a
+-- flat "yes" for anyone holding the anon key. See the file header for
+-- what this trades away.
 
 alter table profiles enable row level security;
 alter table jobs enable row level security;
@@ -124,50 +120,14 @@ alter table issues enable row level security;
 alter table audits enable row level security;
 alter table alerts enable row level security;
 
--- Helper: is the current user a supervisor? Used by every "supervisors
--- see everyone's data" policy below. security definer + a fixed search_path
--- so it can read profiles regardless of the calling policy's own RLS check.
-create or replace function is_supervisor()
-returns boolean as $$
-  select exists (
-    select 1 from public.profiles where id = auth.uid() and role = 'supervisor'
-  );
-$$ language sql security definer set search_path = public stable;
-
--- profiles: everyone signed in can read (names/roles/zones are low
--- sensitivity and needed for the supervisor's team-status views); a user
--- can only update their own row (never their own role — that's an admin
--- action, done directly in the Supabase dashboard for now).
-create policy "profiles_select_all" on profiles for select using (auth.uid() is not null);
-create policy "profiles_update_own" on profiles for update using (auth.uid() = id);
-
--- jobs: a washer sees/updates only their own jobs; a supervisor sees/
--- updates everyone's (to assign, reassign, and monitor).
-create policy "jobs_select" on jobs for select using (washer_id = auth.uid() or is_supervisor());
-create policy "jobs_update" on jobs for update using (washer_id = auth.uid() or is_supervisor());
-create policy "jobs_insert" on jobs for insert with check (is_supervisor());
-
-create policy "attendance_select" on attendance for select using (washer_id = auth.uid() or is_supervisor());
-create policy "attendance_insert" on attendance for insert with check (washer_id = auth.uid() or is_supervisor());
-create policy "attendance_update" on attendance for update using (washer_id = auth.uid() or is_supervisor());
-
-create policy "stock_select" on stock_items for select using (washer_id = auth.uid() or is_supervisor());
-create policy "stock_update" on stock_items for update using (washer_id = auth.uid() or is_supervisor());
-create policy "stock_insert" on stock_items for insert with check (is_supervisor());
-
-create policy "payouts_select" on payouts for select using (washer_id = auth.uid() or is_supervisor());
-create policy "payouts_insert" on payouts for insert with check (is_supervisor());
-
-create policy "issues_select" on issues for select using (reported_by = auth.uid() or is_supervisor());
-create policy "issues_insert" on issues for insert with check (reported_by = auth.uid());
-create policy "issues_update" on issues for update using (is_supervisor());
-
-create policy "audits_select" on audits for select using (washer_id = auth.uid() or is_supervisor());
-create policy "audits_insert" on audits for insert with check (is_supervisor());
-create policy "audits_update" on audits for update using (is_supervisor());
-
-create policy "alerts_select" on alerts for select using (auth.uid() is not null);
-create policy "alerts_insert" on alerts for insert with check (is_supervisor());
+create policy "anon_all_profiles"   on profiles      for all to anon using (true) with check (true);
+create policy "anon_all_jobs"       on jobs          for all to anon using (true) with check (true);
+create policy "anon_all_attendance" on attendance     for all to anon using (true) with check (true);
+create policy "anon_all_stock"      on stock_items    for all to anon using (true) with check (true);
+create policy "anon_all_payouts"    on payouts        for all to anon using (true) with check (true);
+create policy "anon_all_issues"     on issues         for all to anon using (true) with check (true);
+create policy "anon_all_audits"     on audits         for all to anon using (true) with check (true);
+create policy "anon_all_alerts"     on alerts         for all to anon using (true) with check (true);
 
 -- ── Indexes ──────────────────────────────────────────────────
 create index if not exists idx_jobs_washer_date on jobs(washer_id, job_date);
@@ -176,4 +136,14 @@ create index if not exists idx_stock_washer on stock_items(washer_id);
 create index if not exists idx_payouts_washer on payouts(washer_id, payout_date desc);
 create index if not exists idx_audits_washer on audits(washer_id);
 
--- Done: 8 tables, 1 trigger, 20 RLS policies.
+-- ── Seed the two people the app needs to show something real ───
+-- Same names as the reference prototype. Safe to run more than once.
+insert into profiles (full_name, role, zone)
+select 'Ravi Kumar', 'washer', 'Zone 4'
+where not exists (select 1 from profiles where full_name = 'Ravi Kumar');
+
+insert into profiles (full_name, role, zone)
+select 'Priya Sharma', 'supervisor', 'Zone 4'
+where not exists (select 1 from profiles where full_name = 'Priya Sharma');
+
+-- Done: 8 tables, 8 RLS policies, 5 indexes, 2 seeded profiles.
