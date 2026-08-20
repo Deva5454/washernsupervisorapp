@@ -8,6 +8,9 @@ import { RegularizationMenuItem } from "../../components/menu/RegularizationMenu
 import { PayslipMenuItem } from "../../components/menu/PayslipMenuItem";
 import { ExpenseClaimsMenuItem } from "../../components/menu/ExpenseClaimsMenuItem";
 import { TaxDocumentsMenuItem } from "../../components/menu/TaxDocumentsMenuItem";
+import { StockReceiptMenuItem } from "../../components/menu/StockReceiptMenuItem";
+import { MaterialManagementMenuItem } from "../../components/menu/MaterialManagementMenuItem";
+import { UniformMenuItem } from "../../components/menu/UniformMenuItem";
 
 function initials(name: string) {
   return name
@@ -98,6 +101,9 @@ export default function More() {
             <PayslipMenuItem profileId={profile.id} />
             <ExpenseClaimsMenuItem profileId={profile.id} />
             <TaxDocumentsMenuItem profileId={profile.id} />
+            <StockReceiptMenuItem profileId={profile.id} />
+            <MaterialManagementMenuItem profileId={profile.id} />
+            <UniformMenuItem profileId={profile.id} />
           </>
         )}
       </div>

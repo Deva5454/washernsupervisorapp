@@ -3,6 +3,7 @@ import { AlertTriangle, Siren, Wrench } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
 import { notify } from "../../lib/notify";
+import { logActivity } from "../../lib/activityLog";
 import { LEAVE_TYPE_LABEL, ensureLeaveBalances, leaveDays } from "../../lib/leave";
 import type {
   AdvanceRequest,
@@ -13,11 +14,17 @@ import type {
   ExpenseClaim,
   Issue,
   IssueCategory,
+  IssueRoutingStatus,
   LeaveRequest,
   Profile,
   RegularizationRequest,
   SosAlert,
 } from "../../lib/types";
+
+const ROUTING_STATUS_LABEL: Record<Extract<IssueRoutingStatus, "pending_branch" | "pending_central">, string> = {
+  pending_branch: "Pending Branch",
+  pending_central: "Pending Central",
+};
 
 const CATEGORY_LABEL: Record<IssueCategory, string> = {
   broken_part: "Broken Part",
@@ -46,6 +53,7 @@ export default function Alerts() {
 
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [issues, setIssues] = useState<Issue[]>([]);
+  const [roster, setRoster] = useState<Profile[]>([]);
   const [reporters, setReporters] = useState<Map<string, Profile>>(new Map());
   const [sosAlerts, setSosAlerts] = useState<SosAlert[]>([]);
   const [advanceRequests, setAdvanceRequests] = useState<AdvanceRequest[]>([]);
@@ -61,6 +69,12 @@ export default function Alerts() {
   const [reportOpen, setReportOpen] = useState(false);
   const [category, setCategory] = useState<IssueCategory | null>(null);
   const [itemName, setItemName] = useState("");
+  const [incidentWasherId, setIncidentWasherId] = useState("");
+  const [deductQty, setDeductQty] = useState("");
+  const [routingStatus, setRoutingStatus] = useState<Extract<IssueRoutingStatus, "pending_branch" | "pending_central">>(
+    "pending_branch"
+  );
+  const [spareIssued, setSpareIssued] = useState(false);
   const [reportBusy, setReportBusy] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
 
@@ -76,8 +90,12 @@ export default function Alerts() {
       let alertQuery = supabase.from("alerts").select("*").order("created_at", { ascending: false });
       if (profile?.zone) alertQuery = alertQuery.eq("zone", profile.zone);
 
-      const [alertRes, issueRes, sosRes, advanceRes, coverRes, leaveRes, regularizationRes, expenseRes] =
+      let rosterQuery = supabase.from("profiles").select("*").eq("role", "washer");
+      if (profile?.zone) rosterQuery = rosterQuery.eq("zone", profile.zone);
+
+      const [rosterRes, alertRes, issueRes, sosRes, advanceRes, coverRes, leaveRes, regularizationRes, expenseRes] =
         await Promise.all([
+          rosterQuery.order("full_name"),
           alertQuery,
           supabase.from("issues").select("*").eq("status", "open").order("created_at", { ascending: false }),
           supabase.from("sos_alerts").select("*").eq("status", "active").order("created_at", { ascending: false }),
@@ -107,6 +125,7 @@ export default function Alerts() {
             .eq("status", "pending")
             .order("created_at", { ascending: false }),
         ]);
+      if (rosterRes.error) throw rosterRes.error;
       if (alertRes.error) throw alertRes.error;
       if (issueRes.error) throw issueRes.error;
       if (sosRes.error) throw sosRes.error;
@@ -124,6 +143,7 @@ export default function Alerts() {
       const pendingRegularizations = (regularizationRes.data as RegularizationRequest[]) ?? [];
       const pendingExpenses = (expenseRes.data as ExpenseClaim[]) ?? [];
 
+      setRoster((rosterRes.data as Profile[]) ?? []);
       setAlerts((alertRes.data as Alert[]) ?? []);
       setIssues(openIssues);
       setSosAlerts(activeSos);
@@ -333,6 +353,28 @@ export default function Alerts() {
     }
   }
 
+  // Same lookup pattern as ActiveWash.tsx's deductCloths — a missing
+  // stock row shouldn't block the incident report, just skip deduction.
+  async function deductWasherStock(washerId: string, itemNameQuery: string, qty: number) {
+    try {
+      const { data, error } = await supabase
+        .from("stock_items")
+        .select("id, remaining_qty")
+        .eq("washer_id", washerId)
+        .ilike("material_name", `%${itemNameQuery}%`)
+        .limit(1)
+        .maybeSingle();
+      if (error || !data) return false;
+      const next = Math.max(0, data.remaining_qty - qty);
+      const { error: updateErr } = await supabase.from("stock_items").update({ remaining_qty: next }).eq("id", data.id);
+      if (updateErr) return false;
+      return true;
+    } catch (err) {
+      console.error("Stock deduction failed", err);
+      return false;
+    }
+  }
+
   async function submitIncident(e: FormEvent) {
     e.preventDefault();
     if (!profile || !category) return;
@@ -340,16 +382,43 @@ export default function Alerts() {
     setReportError(null);
     try {
       const title = itemName.trim() ? `${CATEGORY_LABEL[category]} — ${itemName.trim()}` : CATEGORY_LABEL[category];
-      const { error: insertErr } = await supabase.from("issues").insert({
-        reported_by: profile.id,
+      const isStockCategory = category === "broken_part" || category === "lost_damaged_bottle";
+      const reportedBy = isStockCategory && incidentWasherId ? incidentWasherId : profile.id;
+      const qty = isStockCategory && deductQty ? Number(deductQty) : null;
+
+      const insertPayload: Record<string, unknown> = {
+        reported_by: reportedBy,
         title,
         category,
         item_name: itemName.trim() || null,
-      });
+      };
+      if (isStockCategory) {
+        insertPayload.qty_deducted = qty;
+      } else if (category === "repair_request") {
+        insertPayload.routing_status = routingStatus;
+        insertPayload.spare_issued = spareIssued;
+      }
+
+      const { error: insertErr } = await supabase.from("issues").insert(insertPayload);
       if (insertErr) throw insertErr;
+
+      let stockImpact = category === "repair_request";
+      if (isStockCategory && incidentWasherId && qty && qty > 0 && itemName.trim()) {
+        stockImpact = await deductWasherStock(incidentWasherId, itemName.trim(), qty);
+      }
+      if (stockImpact) {
+        await logActivity(profile.id, "cloth", "Incident report with stock impact", {
+          details: `${CATEGORY_LABEL[category]}${itemName.trim() ? ` — ${itemName.trim()}` : ""}`,
+        });
+      }
+
       setReportOpen(false);
       setCategory(null);
       setItemName("");
+      setIncidentWasherId("");
+      setDeductQty("");
+      setRoutingStatus("pending_branch");
+      setSpareIssued(false);
       await load();
     } catch (e) {
       setReportError(e instanceof Error ? e.message : "Could not submit the report.");
@@ -431,7 +500,13 @@ export default function Alerts() {
                 <button
                   key={c}
                   type="button"
-                  onClick={() => setCategory(c)}
+                  onClick={() => {
+                    setCategory(c);
+                    setIncidentWasherId("");
+                    setDeductQty("");
+                    setRoutingStatus("pending_branch");
+                    setSpareIssued(false);
+                  }}
                   className={`rounded-xl px-3 py-2.5 text-sm font-bold text-left ${
                     category === c ? "bg-blue-600 text-white" : "bg-white text-gray-700 border border-gray-200"
                   }`}
@@ -447,6 +522,57 @@ export default function Alerts() {
               placeholder="Item / details (optional)"
               className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-600"
             />
+            {(category === "broken_part" || category === "lost_damaged_bottle") && (
+              <div className="space-y-2">
+                <select
+                  value={incidentWasherId}
+                  onChange={(e) => setIncidentWasherId(e.target.value)}
+                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm bg-white"
+                >
+                  <option value="">Which washer's stock? (optional)</option>
+                  {roster.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.full_name}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="number"
+                  min={0}
+                  inputMode="decimal"
+                  value={deductQty}
+                  onChange={(e) => setDeductQty(e.target.value)}
+                  placeholder="Qty to deduct from their stock (optional)"
+                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-600"
+                />
+              </div>
+            )}
+            {category === "repair_request" && (
+              <div className="space-y-2">
+                <select
+                  value={routingStatus}
+                  onChange={(e) =>
+                    setRoutingStatus(e.target.value as Extract<IssueRoutingStatus, "pending_branch" | "pending_central">)
+                  }
+                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm bg-white"
+                >
+                  {(Object.keys(ROUTING_STATUS_LABEL) as Array<keyof typeof ROUTING_STATUS_LABEL>).map((r) => (
+                    <option key={r} value={r}>
+                      {ROUTING_STATUS_LABEL[r]}
+                    </option>
+                  ))}
+                </select>
+                <label className="flex items-center gap-2 text-sm text-gray-700 bg-white border border-gray-200 rounded-xl px-4 py-3">
+                  <input
+                    type="checkbox"
+                    checked={spareIssued}
+                    onChange={(e) => setSpareIssued(e.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  Spare issued from branch stock
+                </label>
+              </div>
+            )}
             {reportError && <p className="text-sm text-red-600">{reportError}</p>}
             <button
               type="submit"
