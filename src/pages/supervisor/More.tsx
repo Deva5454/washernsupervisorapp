@@ -1,6 +1,13 @@
 import { useState } from "react";
 import { ChevronDown, ChevronUp, LogOut, User } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
+import { LeaveMenuItem } from "../../components/menu/LeaveMenuItem";
+import { AdvanceMenuItem } from "../../components/menu/AdvanceMenuItem";
+import { ClothExchangeMenuItem } from "../../components/menu/ClothExchangeMenuItem";
+import { RegularizationMenuItem } from "../../components/menu/RegularizationMenuItem";
+import { PayslipMenuItem } from "../../components/menu/PayslipMenuItem";
+import { ExpenseClaimsMenuItem } from "../../components/menu/ExpenseClaimsMenuItem";
+import { TaxDocumentsMenuItem } from "../../components/menu/TaxDocumentsMenuItem";
 
 function initials(name: string) {
   return name
@@ -79,6 +86,20 @@ export default function More() {
             <span className="font-bold text-gray-900 capitalize">{profile?.role}</span>
           </div>
         </div>
+      </div>
+
+      <div className="bg-gray-100 rounded-2xl divide-y divide-gray-200 overflow-hidden">
+        {profile && (
+          <>
+            <LeaveMenuItem profileId={profile.id} />
+            <AdvanceMenuItem profileId={profile.id} />
+            <ClothExchangeMenuItem profileId={profile.id} />
+            <RegularizationMenuItem profileId={profile.id} />
+            <PayslipMenuItem profileId={profile.id} />
+            <ExpenseClaimsMenuItem profileId={profile.id} />
+            <TaxDocumentsMenuItem profileId={profile.id} />
+          </>
+        )}
       </div>
 
       <div className="bg-gray-100 rounded-2xl overflow-hidden">

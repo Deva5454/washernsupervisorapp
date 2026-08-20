@@ -254,3 +254,50 @@ export interface LeaveRequest {
   created_at: string;
   resolved_at: string | null;
 }
+
+export interface RegularizationRequest {
+  id: string;
+  profile_id: string;
+  target_date: string;
+  requested_status: AttendanceStatus;
+  reason: string | null;
+  status: RequestStatus;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export interface Payslip {
+  id: string;
+  profile_id: string;
+  month: string;
+  gross: number;
+  deductions: number;
+  net: number;
+  notes: string | null;
+  generated_at: string;
+}
+
+export type ExpenseCategory = "travel" | "medical" | "fuel" | "other";
+
+export interface ExpenseClaim {
+  id: string;
+  profile_id: string;
+  category: ExpenseCategory;
+  amount: number;
+  description: string | null;
+  from_location: string | null;
+  to_location: string | null;
+  distance_km: number | null;
+  receipt_url: string | null;
+  status: RequestStatus;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export interface TaxDocument {
+  id: string;
+  profile_id: string;
+  label: string;
+  file_url: string;
+  uploaded_at: string;
+}

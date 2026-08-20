@@ -7,11 +7,15 @@ import { LEAVE_TYPE_LABEL, ensureLeaveBalances, leaveDays } from "../../lib/leav
 import type {
   AdvanceRequest,
   Alert,
+  AttendanceStatus,
   CoverRequest,
+  ExpenseCategory,
+  ExpenseClaim,
   Issue,
   IssueCategory,
   LeaveRequest,
   Profile,
+  RegularizationRequest,
   SosAlert,
 } from "../../lib/types";
 
@@ -20,6 +24,20 @@ const CATEGORY_LABEL: Record<IssueCategory, string> = {
   lost_damaged_bottle: "Lost/Damaged Bottle",
   repair_request: "Repair Request",
   pre_damage: "Pre-Existing Damage",
+  other: "Other",
+};
+
+const STATUS_LABEL: Record<AttendanceStatus, string> = {
+  present: "Present",
+  absent: "Absent",
+  late: "Late",
+  week_off: "Week Off",
+};
+
+const EXPENSE_CATEGORY_LABEL: Record<ExpenseCategory, string> = {
+  travel: "Travel",
+  medical: "Medical",
+  fuel: "Fuel",
   other: "Other",
 };
 
@@ -33,6 +51,8 @@ export default function Alerts() {
   const [advanceRequests, setAdvanceRequests] = useState<AdvanceRequest[]>([]);
   const [coverRequests, setCoverRequests] = useState<CoverRequest[]>([]);
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
+  const [regularizationRequests, setRegularizationRequests] = useState<RegularizationRequest[]>([]);
+  const [expenseClaims, setExpenseClaims] = useState<ExpenseClaim[]>([]);
   const [requesters, setRequesters] = useState<Map<string, Profile>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -56,38 +76,53 @@ export default function Alerts() {
       let alertQuery = supabase.from("alerts").select("*").order("created_at", { ascending: false });
       if (profile?.zone) alertQuery = alertQuery.eq("zone", profile.zone);
 
-      const [alertRes, issueRes, sosRes, advanceRes, coverRes, leaveRes] = await Promise.all([
-        alertQuery,
-        supabase.from("issues").select("*").eq("status", "open").order("created_at", { ascending: false }),
-        supabase.from("sos_alerts").select("*").eq("status", "active").order("created_at", { ascending: false }),
-        supabase
-          .from("advance_requests")
-          .select("*")
-          .eq("status", "pending")
-          .order("created_at", { ascending: false }),
-        supabase
-          .from("cover_requests")
-          .select("*")
-          .eq("status", "pending")
-          .order("cover_date", { ascending: true }),
-        supabase
-          .from("leave_requests")
-          .select("*")
-          .eq("status", "pending")
-          .order("start_date", { ascending: true }),
-      ]);
+      const [alertRes, issueRes, sosRes, advanceRes, coverRes, leaveRes, regularizationRes, expenseRes] =
+        await Promise.all([
+          alertQuery,
+          supabase.from("issues").select("*").eq("status", "open").order("created_at", { ascending: false }),
+          supabase.from("sos_alerts").select("*").eq("status", "active").order("created_at", { ascending: false }),
+          supabase
+            .from("advance_requests")
+            .select("*")
+            .eq("status", "pending")
+            .order("created_at", { ascending: false }),
+          supabase
+            .from("cover_requests")
+            .select("*")
+            .eq("status", "pending")
+            .order("cover_date", { ascending: true }),
+          supabase
+            .from("leave_requests")
+            .select("*")
+            .eq("status", "pending")
+            .order("start_date", { ascending: true }),
+          supabase
+            .from("regularization_requests")
+            .select("*")
+            .eq("status", "pending")
+            .order("target_date", { ascending: true }),
+          supabase
+            .from("expense_claims")
+            .select("*")
+            .eq("status", "pending")
+            .order("created_at", { ascending: false }),
+        ]);
       if (alertRes.error) throw alertRes.error;
       if (issueRes.error) throw issueRes.error;
       if (sosRes.error) throw sosRes.error;
       if (advanceRes.error) throw advanceRes.error;
       if (coverRes.error) throw coverRes.error;
       if (leaveRes.error) throw leaveRes.error;
+      if (regularizationRes.error) throw regularizationRes.error;
+      if (expenseRes.error) throw expenseRes.error;
 
       const openIssues = (issueRes.data as Issue[]) ?? [];
       const activeSos = (sosRes.data as SosAlert[]) ?? [];
       const pendingAdvances = (advanceRes.data as AdvanceRequest[]) ?? [];
       const pendingCovers = (coverRes.data as CoverRequest[]) ?? [];
       const pendingLeaves = (leaveRes.data as LeaveRequest[]) ?? [];
+      const pendingRegularizations = (regularizationRes.data as RegularizationRequest[]) ?? [];
+      const pendingExpenses = (expenseRes.data as ExpenseClaim[]) ?? [];
 
       setAlerts((alertRes.data as Alert[]) ?? []);
       setIssues(openIssues);
@@ -95,6 +130,8 @@ export default function Alerts() {
       setAdvanceRequests(pendingAdvances);
       setCoverRequests(pendingCovers);
       setLeaveRequests(pendingLeaves);
+      setRegularizationRequests(pendingRegularizations);
+      setExpenseClaims(pendingExpenses);
 
       const peopleIds = [
         ...new Set([
@@ -103,6 +140,8 @@ export default function Alerts() {
           ...pendingAdvances.map((a) => a.washer_id),
           ...pendingCovers.map((c) => c.washer_id),
           ...pendingLeaves.map((l) => l.washer_id),
+          ...pendingRegularizations.map((r) => r.profile_id),
+          ...pendingExpenses.map((e) => e.profile_id),
         ]),
       ];
       if (peopleIds.length) {
@@ -230,6 +269,65 @@ export default function Alerts() {
       setLeaveRequests((prev) => prev.filter((r) => r.id !== req.id));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to update leave request.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function resolveRegularization(req: RegularizationRequest, status: "approved" | "rejected") {
+    setBusyId(req.id);
+    try {
+      const { error: updateErr } = await supabase
+        .from("regularization_requests")
+        .update({ status, resolved_at: new Date().toISOString() })
+        .eq("id", req.id);
+      if (updateErr) throw updateErr;
+      if (status === "approved") {
+        const { data: existing, error: findErr } = await supabase
+          .from("attendance")
+          .select("id")
+          .eq("washer_id", req.profile_id)
+          .eq("date", req.target_date)
+          .maybeSingle();
+        if (findErr) throw findErr;
+        const attErr = existing
+          ? (await supabase.from("attendance").update({ status: req.requested_status }).eq("id", existing.id)).error
+          : (
+              await supabase
+                .from("attendance")
+                .insert({ washer_id: req.profile_id, date: req.target_date, status: req.requested_status })
+            ).error;
+        if (attErr) throw attErr;
+      }
+      await notify(
+        req.profile_id,
+        `Regularization request ${status}`,
+        `Your request for ${req.target_date} (${STATUS_LABEL[req.requested_status]}) was ${status}.`
+      );
+      setRegularizationRequests((prev) => prev.filter((r) => r.id !== req.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update regularization request.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function resolveExpenseClaim(claim: ExpenseClaim, status: "approved" | "rejected") {
+    setBusyId(claim.id);
+    try {
+      const { error: updateErr } = await supabase
+        .from("expense_claims")
+        .update({ status, resolved_at: new Date().toISOString() })
+        .eq("id", claim.id);
+      if (updateErr) throw updateErr;
+      await notify(
+        claim.profile_id,
+        `Expense claim ${status}`,
+        `Your ${EXPENSE_CATEGORY_LABEL[claim.category]} claim for ₹${claim.amount.toLocaleString("en-IN")} was ${status}.`
+      );
+      setExpenseClaims((prev) => prev.filter((c) => c.id !== claim.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update expense claim.");
     } finally {
       setBusyId(null);
     }
@@ -567,6 +665,121 @@ export default function Alerts() {
                           className="flex-1 h-11 rounded-full bg-blue-600 disabled:opacity-50 font-bold text-white"
                         >
                           {busyId === req.id ? "Saving…" : "Approve"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <h2 className="text-sm font-extrabold text-gray-900 tracking-wide mb-3">
+              REGULARIZATION REQUESTS
+            </h2>
+            {regularizationRequests.length === 0 ? (
+              <p className="text-sm text-gray-400 bg-gray-100 rounded-2xl px-4 py-4">
+                No pending regularization requests.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {regularizationRequests.map((req) => {
+                  const washer = requesters.get(req.profile_id);
+                  return (
+                    <div key={req.id} className="bg-gray-100 rounded-2xl p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="font-extrabold text-gray-900">
+                          {new Date(req.target_date).toLocaleDateString("en-IN", {
+                            weekday: "short",
+                            day: "numeric",
+                            month: "short",
+                          })}{" "}
+                          → {STATUS_LABEL[req.requested_status]}
+                        </p>
+                        <span className="flex-shrink-0 text-xs font-bold text-blue-600 border border-blue-600 rounded-full px-3 py-1">
+                          Pending
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-500 mt-1">{washer?.full_name ?? "Unknown"}</p>
+                      {req.reason && <p className="text-sm text-gray-700 mt-1">{req.reason}</p>}
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          onClick={() => resolveRegularization(req, "rejected")}
+                          disabled={busyId === req.id}
+                          className="flex-1 h-11 rounded-full border border-gray-300 disabled:opacity-50 font-bold text-gray-900"
+                        >
+                          Reject
+                        </button>
+                        <button
+                          onClick={() => resolveRegularization(req, "approved")}
+                          disabled={busyId === req.id}
+                          className="flex-1 h-11 rounded-full bg-blue-600 disabled:opacity-50 font-bold text-white"
+                        >
+                          {busyId === req.id ? "Saving…" : "Approve"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <h2 className="text-sm font-extrabold text-gray-900 tracking-wide mb-3">
+              EXPENSE CLAIMS
+            </h2>
+            {expenseClaims.length === 0 ? (
+              <p className="text-sm text-gray-400 bg-gray-100 rounded-2xl px-4 py-4">
+                No pending expense claims.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {expenseClaims.map((claim) => {
+                  const washer = requesters.get(claim.profile_id);
+                  return (
+                    <div key={claim.id} className="bg-gray-100 rounded-2xl p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="font-extrabold text-gray-900">
+                          {EXPENSE_CATEGORY_LABEL[claim.category]} · ₹{claim.amount.toLocaleString("en-IN")}
+                        </p>
+                        <span className="flex-shrink-0 text-xs font-bold text-blue-600 border border-blue-600 rounded-full px-3 py-1">
+                          Pending
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-500 mt-1">{washer?.full_name ?? "Unknown"}</p>
+                      {claim.category === "travel" && (claim.from_location || claim.to_location) && (
+                        <p className="text-sm text-gray-700 mt-1">
+                          {claim.from_location ?? "—"} → {claim.to_location ?? "—"}
+                          {claim.distance_km != null ? ` · ${claim.distance_km} km` : ""}
+                        </p>
+                      )}
+                      {claim.description && <p className="text-sm text-gray-700 mt-1">{claim.description}</p>}
+                      {claim.receipt_url && (
+                        <a
+                          href={claim.receipt_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm text-blue-600 font-bold mt-1 inline-block"
+                        >
+                          View Receipt
+                        </a>
+                      )}
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          onClick={() => resolveExpenseClaim(claim, "rejected")}
+                          disabled={busyId === claim.id}
+                          className="flex-1 h-11 rounded-full border border-gray-300 disabled:opacity-50 font-bold text-gray-900"
+                        >
+                          Reject
+                        </button>
+                        <button
+                          onClick={() => resolveExpenseClaim(claim, "approved")}
+                          disabled={busyId === claim.id}
+                          className="flex-1 h-11 rounded-full bg-blue-600 disabled:opacity-50 font-bold text-white"
+                        >
+                          {busyId === claim.id ? "Saving…" : "Approve"}
                         </button>
                       </div>
                     </div>

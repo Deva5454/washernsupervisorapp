@@ -31,6 +31,8 @@
 --     cash_deposits tables)
 --   - supabase_leave_audit_migration.sql (had v7, missing the scored-audit
 --     columns on audits, and the leave_balances / leave_requests tables)
+--   - supabase_selfservice_migration.sql (had v8, missing
+--     regularization_requests / payslips / expense_claims / tax_documents)
 -- ============================================================
 
 create extension if not exists "pgcrypto";
@@ -314,6 +316,68 @@ create table if not exists leave_requests (
   resolved_at timestamptz
 );
 
+-- Self-service items available to BOTH roles (a supervisor is an
+-- employee too, not just a team manager) — profile_id is a generic FK,
+-- same pattern as attendance.washer_id / cloth_exchanges.washer_id.
+
+-- Employee-initiated correction of a past attendance record — distinct
+-- from a supervisor's direct manual override (Dashboard's Team Status),
+-- this is self-requested and needs approval before the attendance row
+-- actually changes.
+create table if not exists regularization_requests (
+  id uuid primary key default gen_random_uuid(),
+  profile_id uuid not null references profiles(id) on delete cascade,
+  target_date date not null,
+  requested_status text not null check (requested_status in ('present', 'absent', 'late', 'week_off')),
+  reason text,
+  status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
+  created_at timestamptz default now(),
+  resolved_at timestamptz
+);
+
+-- Read-only in this app, same as payouts — a real payroll system is the
+-- only thing that should ever write here. Empty until that system (or a
+-- human, via the Supabase table editor) puts rows in.
+create table if not exists payslips (
+  id uuid primary key default gen_random_uuid(),
+  profile_id uuid not null references profiles(id) on delete cascade,
+  month date not null,
+  gross numeric not null default 0,
+  deductions numeric not null default 0,
+  net numeric not null default 0,
+  notes text,
+  generated_at timestamptz default now(),
+  unique (profile_id, month)
+);
+
+-- Travel + general expense claims in one table (category='travel' uses
+-- the from/to/distance fields; other categories leave them null) —
+-- both are genuinely self-initiated requests, unlike payslips.
+create table if not exists expense_claims (
+  id uuid primary key default gen_random_uuid(),
+  profile_id uuid not null references profiles(id) on delete cascade,
+  category text not null check (category in ('travel', 'medical', 'fuel', 'other')),
+  amount numeric not null,
+  description text,
+  from_location text,
+  to_location text,
+  distance_km numeric,
+  receipt_url text,
+  status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
+  created_at timestamptz default now(),
+  resolved_at timestamptz
+);
+
+-- Document upload only — no tax-slab/deduction calculation engine here,
+-- that's real payroll logic this app doesn't own.
+create table if not exists tax_documents (
+  id uuid primary key default gen_random_uuid(),
+  profile_id uuid not null references profiles(id) on delete cascade,
+  label text not null,
+  file_url text not null,
+  uploaded_at timestamptz default now()
+);
+
 -- ── Row Level Security — open to the anon key ───────────────────
 -- No login means no auth.uid() to scope by, so every policy here is a
 -- flat "yes" for anyone holding the anon key. See the file header for
@@ -337,6 +401,10 @@ alter table cover_requests enable row level security;
 alter table cash_deposits enable row level security;
 alter table leave_balances enable row level security;
 alter table leave_requests enable row level security;
+alter table regularization_requests enable row level security;
+alter table payslips enable row level security;
+alter table expense_claims enable row level security;
+alter table tax_documents enable row level security;
 
 create policy "anon_all_profiles"   on profiles      for all to anon using (true) with check (true);
 create policy "anon_all_jobs"       on jobs          for all to anon using (true) with check (true);
@@ -356,6 +424,10 @@ create policy "anon_all_cover_requests" on cover_requests for all to anon using 
 create policy "anon_all_cash_deposits" on cash_deposits for all to anon using (true) with check (true);
 create policy "anon_all_leave_balances" on leave_balances for all to anon using (true) with check (true);
 create policy "anon_all_leave_requests" on leave_requests for all to anon using (true) with check (true);
+create policy "anon_all_regularization_requests" on regularization_requests for all to anon using (true) with check (true);
+create policy "anon_all_payslips" on payslips for all to anon using (true) with check (true);
+create policy "anon_all_expense_claims" on expense_claims for all to anon using (true) with check (true);
+create policy "anon_all_tax_documents" on tax_documents for all to anon using (true) with check (true);
 
 -- Storage: a public bucket for check-in selfies + job proof-of-work photos.
 insert into storage.buckets (id, name, public)
@@ -384,6 +456,10 @@ create index if not exists idx_cover_requests_washer on cover_requests(washer_id
 create index if not exists idx_cash_deposits_washer_date on cash_deposits(washer_id, deposit_date);
 create index if not exists idx_leave_balances_washer on leave_balances(washer_id);
 create index if not exists idx_leave_requests_washer on leave_requests(washer_id, created_at desc);
+create index if not exists idx_regularization_requests_profile on regularization_requests(profile_id, created_at desc);
+create index if not exists idx_payslips_profile on payslips(profile_id, month desc);
+create index if not exists idx_expense_claims_profile on expense_claims(profile_id, created_at desc);
+create index if not exists idx_tax_documents_profile on tax_documents(profile_id);
 
 -- ── Seed the two people the app needs to show something real ───
 -- Same names as the reference prototype. Safe to run more than once.
@@ -395,7 +471,7 @@ insert into profiles (full_name, role, zone)
 select 'Priya Sharma', 'supervisor', 'Zone 4'
 where not exists (select 1 from profiles where full_name = 'Priya Sharma');
 
--- Done: 18 tables, 18 RLS policies, 1 storage bucket, 16 indexes, 2 seeded profiles.
+-- Done: 22 tables, 22 RLS policies, 1 storage bucket, 20 indexes, 2 seeded profiles.
 -- (issues.category / issues.item_name added for supervisor incident reports.
 --  jobs.vehicle_type / payment_* , attendance.gps_unlock_approved_at, and
 --  cloth_units added for washer-side weighted units / payments / cloth
@@ -404,4 +480,6 @@ where not exists (select 1 from profiles where full_name = 'Priya Sharma');
 --  advance_requests / cover_requests / cash_deposits round out that
 --  batch. audits gets real scored-audit columns, and leave_balances /
 --  leave_requests add formal CL/PL/SL/UL leave, distinct from the
---  simpler Request Cover flow.)
+--  simpler Request Cover flow. regularization_requests / payslips /
+--  expense_claims / tax_documents add self-service items available to
+--  BOTH roles, not just washers — a supervisor is an employee too.)
