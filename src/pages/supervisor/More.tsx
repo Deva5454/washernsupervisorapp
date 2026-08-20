@@ -15,6 +15,11 @@ import { NewJoinerMenuItem } from "../../components/menu/NewJoinerMenuItem";
 import { JobHistoryMenuItem } from "../../components/menu/JobHistoryMenuItem";
 import { CashRegisterMenuItem } from "../../components/menu/CashRegisterMenuItem";
 import { SubscriptionCashMenuItem } from "../../components/menu/SubscriptionCashMenuItem";
+import { PeriodicScheduleMenuItem } from "../../components/menu/PeriodicScheduleMenuItem";
+import { DailyFlowMenuItem } from "../../components/menu/DailyFlowMenuItem";
+import { ActivityLogMenuItem } from "../../components/menu/ActivityLogMenuItem";
+import { EscalationMenuItem } from "../../components/menu/EscalationMenuItem";
+import { AttendanceDetailMenuItem } from "../../components/menu/AttendanceDetailMenuItem";
 
 function initials(name: string) {
   return name
@@ -112,6 +117,11 @@ export default function More() {
             <JobHistoryMenuItem profileId={profile.id} />
             <CashRegisterMenuItem profileId={profile.id} />
             <SubscriptionCashMenuItem profileId={profile.id} />
+            <PeriodicScheduleMenuItem />
+            <DailyFlowMenuItem profileId={profile.id} />
+            <ActivityLogMenuItem />
+            <EscalationMenuItem profileId={profile.id} />
+            <AttendanceDetailMenuItem />
           </>
         )}
       </div>

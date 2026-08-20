@@ -96,6 +96,9 @@ export default function AuditPage() {
   const [photos, setPhotos] = useState<string[]>([]);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [notes, setNotes] = useState("");
+  const [gpsExceptionReason, setGpsExceptionReason] = useState("");
+  const [photoAuthenticityFlagged, setPhotoAuthenticityFlagged] = useState(false);
+  const [photoAuthenticityNote, setPhotoAuthenticityNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [wizardError, setWizardError] = useState<string | null>(null);
 
@@ -157,6 +160,9 @@ export default function AuditPage() {
     setProcessChecked({});
     setPhotos([]);
     setNotes("");
+    setGpsExceptionReason("");
+    setPhotoAuthenticityFlagged(false);
+    setPhotoAuthenticityNote("");
     setWizardError(null);
   }
 
@@ -222,6 +228,9 @@ export default function AuditPage() {
         grade,
         notes: notes.trim() || null,
         checklist: { uniform: uniformChecked, materials: materialsChecked, process: processChecked, photos },
+        gps_exception_reason: gpsExceptionReason.trim() || null,
+        photo_authenticity_flagged: photoAuthenticityFlagged,
+        photo_authenticity_note: photoAuthenticityFlagged ? photoAuthenticityNote.trim() || null : null,
       };
       const { error: saveErr } = auditId
         ? await supabase.from("audits").update(payload).eq("id", auditId)
@@ -436,6 +445,31 @@ export default function AuditPage() {
                 <span className="text-xl font-extrabold text-blue-600">{totalScore}/100</span>
               </div>
             </div>
+            <input
+              type="text"
+              value={gpsExceptionReason}
+              onChange={(e) => setGpsExceptionReason(e.target.value)}
+              placeholder="GPS exception reason (optional — only if auditing outside the usual location)"
+              className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-600"
+            />
+            <label className="flex items-center gap-2 text-sm text-gray-700 bg-gray-100 rounded-xl px-4 py-3">
+              <input
+                type="checkbox"
+                checked={photoAuthenticityFlagged}
+                onChange={(e) => setPhotoAuthenticityFlagged(e.target.checked)}
+                className="h-4 w-4"
+              />
+              Flag photo authenticity
+            </label>
+            {photoAuthenticityFlagged && (
+              <input
+                type="text"
+                value={photoAuthenticityNote}
+                onChange={(e) => setPhotoAuthenticityNote(e.target.value)}
+                placeholder="Note on the concern"
+                className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-600"
+              />
+            )}
             <textarea
               value={notes}
               onChange={(e) => setNotes(e.target.value)}

@@ -1,9 +1,10 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { AlertTriangle, Siren, Wrench } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { AlertTriangle, Camera, Siren, Wrench } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
 import { notify } from "../../lib/notify";
 import { logActivity } from "../../lib/activityLog";
+import { uploadPhoto } from "../../lib/uploadPhoto";
 import { LEAVE_TYPE_LABEL, ensureLeaveBalances, leaveDays } from "../../lib/leave";
 import type {
   AdvanceRequest,
@@ -15,6 +16,7 @@ import type {
   Issue,
   IssueCategory,
   IssueRoutingStatus,
+  Job,
   LeaveRequest,
   Profile,
   RegularizationRequest,
@@ -48,12 +50,19 @@ const EXPENSE_CATEGORY_LABEL: Record<ExpenseCategory, string> = {
   other: "Other",
 };
 
+// Local-timezone date string, matching the `date` columns (job_date) exactly.
+function isoDate(d: Date) {
+  const offset = d.getTimezoneOffset();
+  return new Date(d.getTime() - offset * 60000).toISOString().slice(0, 10);
+}
+
 export default function Alerts() {
   const { profile } = useAuth();
 
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [issues, setIssues] = useState<Issue[]>([]);
   const [roster, setRoster] = useState<Profile[]>([]);
+  const [todaysJobs, setTodaysJobs] = useState<Job[]>([]);
   const [reporters, setReporters] = useState<Map<string, Profile>>(new Map());
   const [sosAlerts, setSosAlerts] = useState<SosAlert[]>([]);
   const [advanceRequests, setAdvanceRequests] = useState<AdvanceRequest[]>([]);
@@ -75,6 +84,9 @@ export default function Alerts() {
     "pending_branch"
   );
   const [spareIssued, setSpareIssued] = useState(false);
+  const [incidentJobId, setIncidentJobId] = useState("");
+  const [incidentPhoto, setIncidentPhoto] = useState<File | null>(null);
+  const incidentPhotoInputRef = useRef<HTMLInputElement>(null);
   const [reportBusy, setReportBusy] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
 
@@ -93,9 +105,20 @@ export default function Alerts() {
       let rosterQuery = supabase.from("profiles").select("*").eq("role", "washer");
       if (profile?.zone) rosterQuery = rosterQuery.eq("zone", profile.zone);
 
-      const [rosterRes, alertRes, issueRes, sosRes, advanceRes, coverRes, leaveRes, regularizationRes, expenseRes] =
-        await Promise.all([
+      const [
+        rosterRes,
+        jobsRes,
+        alertRes,
+        issueRes,
+        sosRes,
+        advanceRes,
+        coverRes,
+        leaveRes,
+        regularizationRes,
+        expenseRes,
+      ] = await Promise.all([
           rosterQuery.order("full_name"),
+          supabase.from("jobs").select("*").eq("job_date", isoDate(new Date())),
           alertQuery,
           supabase.from("issues").select("*").eq("status", "open").order("created_at", { ascending: false }),
           supabase.from("sos_alerts").select("*").eq("status", "active").order("created_at", { ascending: false }),
@@ -126,6 +149,7 @@ export default function Alerts() {
             .order("created_at", { ascending: false }),
         ]);
       if (rosterRes.error) throw rosterRes.error;
+      if (jobsRes.error) throw jobsRes.error;
       if (alertRes.error) throw alertRes.error;
       if (issueRes.error) throw issueRes.error;
       if (sosRes.error) throw sosRes.error;
@@ -144,6 +168,7 @@ export default function Alerts() {
       const pendingExpenses = (expenseRes.data as ExpenseClaim[]) ?? [];
 
       setRoster((rosterRes.data as Profile[]) ?? []);
+      setTodaysJobs((jobsRes.data as Job[]) ?? []);
       setAlerts((alertRes.data as Alert[]) ?? []);
       setIssues(openIssues);
       setSosAlerts(activeSos);
@@ -397,6 +422,9 @@ export default function Alerts() {
       } else if (category === "repair_request") {
         insertPayload.routing_status = routingStatus;
         insertPayload.spare_issued = spareIssued;
+      } else if (category === "pre_damage") {
+        insertPayload.job_id = incidentJobId || null;
+        insertPayload.photo_url = incidentPhoto ? await uploadPhoto(incidentPhoto, `issues/${profile.id}`) : null;
       }
 
       const { error: insertErr } = await supabase.from("issues").insert(insertPayload);
@@ -419,6 +447,8 @@ export default function Alerts() {
       setDeductQty("");
       setRoutingStatus("pending_branch");
       setSpareIssued(false);
+      setIncidentJobId("");
+      setIncidentPhoto(null);
       await load();
     } catch (e) {
       setReportError(e instanceof Error ? e.message : "Could not submit the report.");
@@ -506,6 +536,8 @@ export default function Alerts() {
                     setDeductQty("");
                     setRoutingStatus("pending_branch");
                     setSpareIssued(false);
+                    setIncidentJobId("");
+                    setIncidentPhoto(null);
                   }}
                   className={`rounded-xl px-3 py-2.5 text-sm font-bold text-left ${
                     category === c ? "bg-blue-600 text-white" : "bg-white text-gray-700 border border-gray-200"
@@ -571,6 +603,52 @@ export default function Alerts() {
                   />
                   Spare issued from branch stock
                 </label>
+              </div>
+            )}
+            {category === "pre_damage" && (
+              <div className="space-y-2">
+                <select
+                  value={incidentJobId}
+                  onChange={(e) => setIncidentJobId(e.target.value)}
+                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm bg-white"
+                >
+                  <option value="">Which job? (optional)</option>
+                  {todaysJobs.map((job) => (
+                    <option key={job.id} value={job.id}>
+                      {job.customer_name} — {job.vehicle_make} {job.vehicle_reg}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => incidentPhotoInputRef.current?.click()}
+                  className="w-full h-24 rounded-xl border-2 border-dashed border-gray-300 bg-white flex flex-col items-center justify-center gap-1 overflow-hidden relative"
+                >
+                  {incidentPhoto ? (
+                    <img
+                      src={URL.createObjectURL(incidentPhoto)}
+                      alt="Pre-existing damage"
+                      className="absolute inset-0 w-full h-full object-cover"
+                    />
+                  ) : (
+                    <>
+                      <Camera className="h-6 w-6 text-gray-400" />
+                      <span className="text-xs text-gray-500 font-medium">Tap to capture photo (optional)</span>
+                    </>
+                  )}
+                </button>
+                <input
+                  ref={incidentPhotoInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (file) setIncidentPhoto(file);
+                  }}
+                />
               </div>
             )}
             {reportError && <p className="text-sm text-red-600">{reportError}</p>}
