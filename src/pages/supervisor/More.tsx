@@ -11,6 +11,10 @@ import { TaxDocumentsMenuItem } from "../../components/menu/TaxDocumentsMenuItem
 import { StockReceiptMenuItem } from "../../components/menu/StockReceiptMenuItem";
 import { MaterialManagementMenuItem } from "../../components/menu/MaterialManagementMenuItem";
 import { UniformMenuItem } from "../../components/menu/UniformMenuItem";
+import { NewJoinerMenuItem } from "../../components/menu/NewJoinerMenuItem";
+import { JobHistoryMenuItem } from "../../components/menu/JobHistoryMenuItem";
+import { CashRegisterMenuItem } from "../../components/menu/CashRegisterMenuItem";
+import { SubscriptionCashMenuItem } from "../../components/menu/SubscriptionCashMenuItem";
 
 function initials(name: string) {
   return name
@@ -104,6 +108,10 @@ export default function More() {
             <StockReceiptMenuItem profileId={profile.id} />
             <MaterialManagementMenuItem profileId={profile.id} />
             <UniformMenuItem profileId={profile.id} />
+            <NewJoinerMenuItem profileId={profile.id} />
+            <JobHistoryMenuItem profileId={profile.id} />
+            <CashRegisterMenuItem profileId={profile.id} />
+            <SubscriptionCashMenuItem profileId={profile.id} />
           </>
         )}
       </div>
