@@ -124,6 +124,13 @@ export interface Issue {
 }
 
 export type AuditStatus = "pending" | "completed";
+export type AuditGrade = "pass" | "minor" | "major" | "failed";
+
+export interface AuditChecklist {
+  uniform: Record<string, boolean>;
+  materials: Record<string, boolean>;
+  process: Record<string, boolean>;
+}
 
 export interface Audit {
   id: string;
@@ -133,6 +140,15 @@ export interface Audit {
   audit_status: AuditStatus;
   completed_at: string | null;
   created_at: string;
+  job_id: string | null;
+  uniform_score: number | null;
+  materials_score: number | null;
+  process_score: number | null;
+  photo_score: number | null;
+  total_score: number | null;
+  grade: AuditGrade | null;
+  notes: string | null;
+  checklist: AuditChecklist | null;
 }
 
 export interface Alert {
@@ -214,4 +230,27 @@ export interface CashDeposit {
   deposit_date: string;
   deposited_at: string;
   recorded_by: string | null;
+}
+
+export type LeaveType = "CL" | "PL" | "SL" | "UL";
+
+export interface LeaveBalance {
+  id: string;
+  washer_id: string;
+  leave_type: LeaveType;
+  total: number;
+  used: number;
+  updated_at: string;
+}
+
+export interface LeaveRequest {
+  id: string;
+  washer_id: string;
+  leave_type: LeaveType;
+  start_date: string;
+  end_date: string;
+  reason: string | null;
+  status: RequestStatus;
+  created_at: string;
+  resolved_at: string | null;
 }

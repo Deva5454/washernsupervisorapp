@@ -3,12 +3,14 @@ import { AlertTriangle, Siren, Wrench } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
 import { notify } from "../../lib/notify";
+import { LEAVE_TYPE_LABEL, ensureLeaveBalances, leaveDays } from "../../lib/leave";
 import type {
   AdvanceRequest,
   Alert,
   CoverRequest,
   Issue,
   IssueCategory,
+  LeaveRequest,
   Profile,
   SosAlert,
 } from "../../lib/types";
@@ -30,6 +32,7 @@ export default function Alerts() {
   const [sosAlerts, setSosAlerts] = useState<SosAlert[]>([]);
   const [advanceRequests, setAdvanceRequests] = useState<AdvanceRequest[]>([]);
   const [coverRequests, setCoverRequests] = useState<CoverRequest[]>([]);
+  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
   const [requesters, setRequesters] = useState<Map<string, Profile>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -53,7 +56,7 @@ export default function Alerts() {
       let alertQuery = supabase.from("alerts").select("*").order("created_at", { ascending: false });
       if (profile?.zone) alertQuery = alertQuery.eq("zone", profile.zone);
 
-      const [alertRes, issueRes, sosRes, advanceRes, coverRes] = await Promise.all([
+      const [alertRes, issueRes, sosRes, advanceRes, coverRes, leaveRes] = await Promise.all([
         alertQuery,
         supabase.from("issues").select("*").eq("status", "open").order("created_at", { ascending: false }),
         supabase.from("sos_alerts").select("*").eq("status", "active").order("created_at", { ascending: false }),
@@ -67,23 +70,31 @@ export default function Alerts() {
           .select("*")
           .eq("status", "pending")
           .order("cover_date", { ascending: true }),
+        supabase
+          .from("leave_requests")
+          .select("*")
+          .eq("status", "pending")
+          .order("start_date", { ascending: true }),
       ]);
       if (alertRes.error) throw alertRes.error;
       if (issueRes.error) throw issueRes.error;
       if (sosRes.error) throw sosRes.error;
       if (advanceRes.error) throw advanceRes.error;
       if (coverRes.error) throw coverRes.error;
+      if (leaveRes.error) throw leaveRes.error;
 
       const openIssues = (issueRes.data as Issue[]) ?? [];
       const activeSos = (sosRes.data as SosAlert[]) ?? [];
       const pendingAdvances = (advanceRes.data as AdvanceRequest[]) ?? [];
       const pendingCovers = (coverRes.data as CoverRequest[]) ?? [];
+      const pendingLeaves = (leaveRes.data as LeaveRequest[]) ?? [];
 
       setAlerts((alertRes.data as Alert[]) ?? []);
       setIssues(openIssues);
       setSosAlerts(activeSos);
       setAdvanceRequests(pendingAdvances);
       setCoverRequests(pendingCovers);
+      setLeaveRequests(pendingLeaves);
 
       const peopleIds = [
         ...new Set([
@@ -91,6 +102,7 @@ export default function Alerts() {
           ...activeSos.map((s) => s.washer_id),
           ...pendingAdvances.map((a) => a.washer_id),
           ...pendingCovers.map((c) => c.washer_id),
+          ...pendingLeaves.map((l) => l.washer_id),
         ]),
       ];
       if (peopleIds.length) {
@@ -186,6 +198,38 @@ export default function Alerts() {
       setCoverRequests((prev) => prev.filter((r) => r.id !== req.id));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to update cover request.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function resolveLeave(req: LeaveRequest, status: "approved" | "rejected") {
+    setBusyId(req.id);
+    try {
+      const { error: updateErr } = await supabase
+        .from("leave_requests")
+        .update({ status, resolved_at: new Date().toISOString() })
+        .eq("id", req.id);
+      if (updateErr) throw updateErr;
+      if (status === "approved") {
+        const balances = await ensureLeaveBalances(req.washer_id);
+        const balance = balances.find((b) => b.leave_type === req.leave_type);
+        if (balance) {
+          const { error: balErr } = await supabase
+            .from("leave_balances")
+            .update({ used: balance.used + leaveDays(req.start_date, req.end_date), updated_at: new Date().toISOString() })
+            .eq("id", balance.id);
+          if (balErr) throw balErr;
+        }
+      }
+      await notify(
+        req.washer_id,
+        `Leave request ${status}`,
+        `Your ${LEAVE_TYPE_LABEL[req.leave_type]} request (${req.start_date} → ${req.end_date}) was ${status}.`
+      );
+      setLeaveRequests((prev) => prev.filter((r) => r.id !== req.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update leave request.");
     } finally {
       setBusyId(null);
     }
@@ -469,6 +513,56 @@ export default function Alerts() {
                         </button>
                         <button
                           onClick={() => resolveCover(req, "approved")}
+                          disabled={busyId === req.id}
+                          className="flex-1 h-11 rounded-full bg-blue-600 disabled:opacity-50 font-bold text-white"
+                        >
+                          {busyId === req.id ? "Saving…" : "Approve"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <h2 className="text-sm font-extrabold text-gray-900 tracking-wide mb-3">
+              LEAVE REQUESTS
+            </h2>
+            {leaveRequests.length === 0 ? (
+              <p className="text-sm text-gray-400 bg-gray-100 rounded-2xl px-4 py-4">
+                No pending leave requests.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {leaveRequests.map((req) => {
+                  const washer = requesters.get(req.washer_id);
+                  return (
+                    <div key={req.id} className="bg-gray-100 rounded-2xl p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="font-extrabold text-gray-900">
+                          {LEAVE_TYPE_LABEL[req.leave_type]} ({req.leave_type})
+                        </p>
+                        <span className="flex-shrink-0 text-xs font-bold text-blue-600 border border-blue-600 rounded-full px-3 py-1">
+                          Pending
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-500 mt-1">{washer?.full_name ?? "Unknown"}</p>
+                      <p className="text-sm text-gray-700 mt-1">
+                        {req.start_date} → {req.end_date} · {leaveDays(req.start_date, req.end_date)} day(s)
+                      </p>
+                      {req.reason && <p className="text-sm text-gray-700 mt-1">{req.reason}</p>}
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          onClick={() => resolveLeave(req, "rejected")}
+                          disabled={busyId === req.id}
+                          className="flex-1 h-11 rounded-full border border-gray-300 disabled:opacity-50 font-bold text-gray-900"
+                        >
+                          Reject
+                        </button>
+                        <button
+                          onClick={() => resolveLeave(req, "approved")}
                           disabled={busyId === req.id}
                           className="flex-1 h-11 rounded-full bg-blue-600 disabled:opacity-50 font-bold text-white"
                         >

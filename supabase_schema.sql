@@ -29,6 +29,8 @@
 --     photo_url / pre_damage category, jobs.override_reason, and the
 --     sos_alerts / notifications / advance_requests / cover_requests /
 --     cash_deposits tables)
+--   - supabase_leave_audit_migration.sql (had v7, missing the scored-audit
+--     columns on audits, and the leave_balances / leave_requests tables)
 -- ============================================================
 
 create extension if not exists "pgcrypto";
@@ -171,7 +173,23 @@ create table if not exists audits (
   vehicle_reg text not null,
   audit_status text not null default 'pending' check (audit_status in ('pending', 'completed')),
   completed_at timestamptz,
-  created_at timestamptz default now()
+  created_at timestamptz default now(),
+  -- Full 6-step scored audit: optionally tied to the job being audited
+  -- (its customer/vehicle stand in for the ERP's separate customer
+  -- lookup, since this app has no standalone customers table). Score
+  -- weights match the ERP: uniform/20, materials/30, process/30,
+  -- photo-evidence/20 (photos, not video — no video upload pipeline
+  -- exists here). checklist stores the raw per-item answers so the
+  -- score is always re-derivable, not just the total.
+  job_id uuid references jobs(id) on delete set null,
+  uniform_score int,
+  materials_score int,
+  process_score int,
+  photo_score int,
+  total_score int,
+  grade text check (grade is null or grade in ('pass', 'minor', 'major', 'failed')),
+  notes text,
+  checklist jsonb
 );
 
 create table if not exists alerts (
@@ -269,6 +287,33 @@ create table if not exists cash_deposits (
   recorded_by uuid references profiles(id)
 );
 
+-- Formal leave (distinct from Request Cover, which just acknowledges a
+-- future-date staffing need without touching a balance). Real type/
+-- balance system matching the ERP's CL/PL/SL/UL types — no pro-rata or
+-- probation-based accrual engine here, balances are just totals a
+-- washer draws down against as requests are approved.
+create table if not exists leave_balances (
+  id uuid primary key default gen_random_uuid(),
+  washer_id uuid not null references profiles(id) on delete cascade,
+  leave_type text not null check (leave_type in ('CL', 'PL', 'SL', 'UL')),
+  total numeric not null default 0,
+  used numeric not null default 0,
+  updated_at timestamptz default now(),
+  unique (washer_id, leave_type)
+);
+
+create table if not exists leave_requests (
+  id uuid primary key default gen_random_uuid(),
+  washer_id uuid not null references profiles(id) on delete cascade,
+  leave_type text not null check (leave_type in ('CL', 'PL', 'SL', 'UL')),
+  start_date date not null,
+  end_date date not null,
+  reason text,
+  status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
+  created_at timestamptz default now(),
+  resolved_at timestamptz
+);
+
 -- ── Row Level Security — open to the anon key ───────────────────
 -- No login means no auth.uid() to scope by, so every policy here is a
 -- flat "yes" for anyone holding the anon key. See the file header for
@@ -290,6 +335,8 @@ alter table notifications enable row level security;
 alter table advance_requests enable row level security;
 alter table cover_requests enable row level security;
 alter table cash_deposits enable row level security;
+alter table leave_balances enable row level security;
+alter table leave_requests enable row level security;
 
 create policy "anon_all_profiles"   on profiles      for all to anon using (true) with check (true);
 create policy "anon_all_jobs"       on jobs          for all to anon using (true) with check (true);
@@ -307,6 +354,8 @@ create policy "anon_all_notifications" on notifications for all to anon using (t
 create policy "anon_all_advance_requests" on advance_requests for all to anon using (true) with check (true);
 create policy "anon_all_cover_requests" on cover_requests for all to anon using (true) with check (true);
 create policy "anon_all_cash_deposits" on cash_deposits for all to anon using (true) with check (true);
+create policy "anon_all_leave_balances" on leave_balances for all to anon using (true) with check (true);
+create policy "anon_all_leave_requests" on leave_requests for all to anon using (true) with check (true);
 
 -- Storage: a public bucket for check-in selfies + job proof-of-work photos.
 insert into storage.buckets (id, name, public)
@@ -333,6 +382,8 @@ create index if not exists idx_notifications_profile on notifications(profile_id
 create index if not exists idx_advance_requests_washer on advance_requests(washer_id, created_at desc);
 create index if not exists idx_cover_requests_washer on cover_requests(washer_id, created_at desc);
 create index if not exists idx_cash_deposits_washer_date on cash_deposits(washer_id, deposit_date);
+create index if not exists idx_leave_balances_washer on leave_balances(washer_id);
+create index if not exists idx_leave_requests_washer on leave_requests(washer_id, created_at desc);
 
 -- ── Seed the two people the app needs to show something real ───
 -- Same names as the reference prototype. Safe to run more than once.
@@ -344,11 +395,13 @@ insert into profiles (full_name, role, zone)
 select 'Priya Sharma', 'supervisor', 'Zone 4'
 where not exists (select 1 from profiles where full_name = 'Priya Sharma');
 
--- Done: 16 tables, 16 RLS policies, 1 storage bucket, 14 indexes, 2 seeded profiles.
+-- Done: 18 tables, 18 RLS policies, 1 storage bucket, 16 indexes, 2 seeded profiles.
 -- (issues.category / issues.item_name added for supervisor incident reports.
 --  jobs.vehicle_type / payment_* , attendance.gps_unlock_approved_at, and
 --  cloth_units added for washer-side weighted units / payments / cloth
 --  tracking / GPS-lockout unlock. issues.job_id / photo_url / pre_damage
 --  category, jobs.override_reason, and sos_alerts / notifications /
---  advance_requests / cover_requests / cash_deposits round out the
---  remaining washer+supervisor feature gaps.)
+--  advance_requests / cover_requests / cash_deposits round out that
+--  batch. audits gets real scored-audit columns, and leave_balances /
+--  leave_requests add formal CL/PL/SL/UL leave, distinct from the
+--  simpler Request Cover flow.)
