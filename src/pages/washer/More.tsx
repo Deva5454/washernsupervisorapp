@@ -10,6 +10,7 @@ import { RegularizationMenuItem } from "../../components/menu/RegularizationMenu
 import { PayslipMenuItem } from "../../components/menu/PayslipMenuItem";
 import { ExpenseClaimsMenuItem } from "../../components/menu/ExpenseClaimsMenuItem";
 import { TaxDocumentsMenuItem } from "../../components/menu/TaxDocumentsMenuItem";
+import { DemoRequestsMenuItem } from "../../components/menu/DemoRequestsMenuItem";
 import type { AttendanceRecord, Audit, IssueCategory } from "../../lib/types";
 
 type Section =
@@ -554,6 +555,7 @@ export default function More() {
         <PayslipMenuItem profileId={profile.id} />
         <ExpenseClaimsMenuItem profileId={profile.id} />
         <TaxDocumentsMenuItem profileId={profile.id} />
+        <DemoRequestsMenuItem profileId={profile.id} />
 
         <MenuRow
           label="Emergency SOS"

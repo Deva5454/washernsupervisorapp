@@ -25,6 +25,15 @@ export const VEHICLE_TYPE_UNITS: Record<VehicleType, number> = {
   addon: 0.5,
 };
 
+export type JobFailureReason =
+  | "customer_unavailable"
+  | "vehicle_unavailable"
+  | "equipment_failure"
+  | "weather"
+  | "safety"
+  | "access_denied"
+  | "other";
+
 export interface Job {
   id: string;
   washer_id: string | null;
@@ -48,6 +57,8 @@ export interface Job {
   payment_reference: string | null;
   payment_collected_at: string | null;
   override_reason: string | null;
+  failure_reason: JobFailureReason | null;
+  auto_reschedule: boolean;
   job_date: string;
   created_at: string;
   updated_at: string;
@@ -79,6 +90,7 @@ export interface AttendanceRecord {
   gps_lng: number | null;
   gps_lost_at: string | null;
   gps_unlock_approved_at: string | null;
+  supervisor_note: string | null;
   created_at: string;
 }
 
@@ -110,6 +122,8 @@ export type IssueCategory =
   | "pre_damage"
   | "other";
 
+export type IssueRoutingStatus = "none" | "pending_branch" | "pending_central" | "resolved";
+
 export interface Issue {
   id: string;
   reported_by: string;
@@ -119,6 +133,9 @@ export interface Issue {
   item_name: string | null;
   job_id: string | null;
   photo_url: string | null;
+  qty_deducted: number | null;
+  routing_status: IssueRoutingStatus;
+  spare_issued: boolean;
   created_at: string;
   resolved_at: string | null;
 }
@@ -149,6 +166,9 @@ export interface Audit {
   grade: AuditGrade | null;
   notes: string | null;
   checklist: AuditChecklist | null;
+  gps_exception_reason: string | null;
+  photo_authenticity_flagged: boolean;
+  photo_authenticity_note: string | null;
 }
 
 export interface Alert {
@@ -300,4 +320,162 @@ export interface TaxDocument {
   label: string;
   file_url: string;
   uploaded_at: string;
+}
+
+export interface StockRequest {
+  id: string;
+  profile_id: string;
+  material_name: string;
+  requested_qty: number;
+  reason: string | null;
+  status: RequestStatus;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export type DemoRequestStatus = "pending" | "accepted" | "declined";
+
+export interface DemoRequest {
+  id: string;
+  washer_id: string;
+  customer_name: string;
+  customer_phone: string | null;
+  vehicle_info: string | null;
+  area: string | null;
+  scheduled_time: string | null;
+  status: DemoRequestStatus;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export interface StockReceipt {
+  id: string;
+  supervisor_id: string;
+  challan_number: string;
+  material_name: string;
+  received_qty: number;
+  damaged_qty: number;
+  shortfall_notes: string | null;
+  received_at: string;
+}
+
+export interface SupervisorStock {
+  id: string;
+  supervisor_id: string;
+  material_name: string;
+  buffer_qty: number;
+  unit: string;
+  updated_at: string;
+}
+
+export interface MaterialIssuance {
+  id: string;
+  supervisor_id: string;
+  washer_id: string;
+  material_name: string;
+  qty: number;
+  issued_at: string;
+}
+
+export type UniformIssuanceReason = "entitlement" | "replacement";
+
+export interface UniformIssuance {
+  id: string;
+  profile_id: string;
+  issued_by: string;
+  reason: UniformIssuanceReason;
+  notes: string | null;
+  damaged_returned: boolean;
+  created_at: string;
+}
+
+export interface CashRegister {
+  id: string;
+  supervisor_id: string;
+  shift_date: string;
+  cash_total: number;
+  upi_total: number;
+  link_total: number;
+  deposit_reference: string;
+  submitted_at: string;
+}
+
+export interface SubscriptionCashDeposit {
+  id: string;
+  supervisor_id: string;
+  customer_name: string;
+  customer_phone: string | null;
+  amount: number;
+  bank_reference: string | null;
+  notes: string | null;
+  deposited_at: string;
+}
+
+export interface PeriodicSchedule {
+  id: string;
+  customer_name: string;
+  customer_phone: string | null;
+  area: string | null;
+  zone: string | null;
+  service_name: string;
+  frequency_days: number;
+  next_due_date: string;
+  monthly_cap: number;
+  used_this_month: number;
+  last_serviced_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DailyFlowProgress {
+  id: string;
+  supervisor_id: string;
+  flow_date: string;
+  completed_steps: string[];
+  updated_at: string;
+}
+
+export type ActivityLogCategory = "attendance" | "audit" | "lead" | "cloth" | "escalation" | "other";
+
+export interface ActivityLogEntry {
+  id: string;
+  actor_id: string;
+  category: ActivityLogCategory;
+  action: string;
+  details: string | null;
+  gps_lat: number | null;
+  gps_lng: number | null;
+  gps_verified: boolean;
+  created_at: string;
+}
+
+export type EscalationCaseType = "missed_visit_credit" | "quality_dispute" | "bonus_correction" | "other";
+
+export interface Escalation {
+  id: string;
+  raised_by: string;
+  washer_id: string | null;
+  case_type: EscalationCaseType;
+  reason: string;
+  details: string | null;
+  status: "pending" | "resolved";
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export interface SchedulePause {
+  id: string;
+  washer_id: string;
+  reason: string;
+  paused_by: string;
+  paused_at: string;
+  resumed_at: string | null;
+}
+
+export interface BatchInvalidation {
+  id: string;
+  batch_id: string;
+  reason: string;
+  invalidated_by: string;
+  created_at: string;
 }

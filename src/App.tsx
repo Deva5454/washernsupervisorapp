@@ -8,7 +8,9 @@ import ActiveWash from "./pages/washer/ActiveWash";
 import WasherEarnings from "./pages/washer/Earnings";
 import WasherStock from "./pages/washer/Stock";
 import WasherMore from "./pages/washer/More";
+import WasherDaySummary from "./pages/washer/DaySummary";
 import Notifications from "./pages/Notifications";
+import Track from "./pages/Track";
 
 import SupervisorDashboard from "./pages/supervisor/Dashboard";
 import SupervisorAudit from "./pages/supervisor/Audit";
@@ -60,6 +62,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Gate><RoleHome /></Gate>} />
           <Route path="/notifications" element={<Gate><Notifications /></Gate>} />
+          <Route path="/track/:jobId" element={<Track />} />
 
           <Route path="/washer" element={<Gate><WasherHome /></Gate>} />
           <Route path="/washer/jobs" element={<Gate><WasherJobs /></Gate>} />
@@ -67,6 +70,7 @@ export default function App() {
           <Route path="/washer/earnings" element={<Gate><WasherEarnings /></Gate>} />
           <Route path="/washer/stock" element={<Gate><WasherStock /></Gate>} />
           <Route path="/washer/more" element={<Gate><WasherMore /></Gate>} />
+          <Route path="/washer/day-summary" element={<Gate><WasherDaySummary /></Gate>} />
 
           <Route path="/supervisor" element={<Gate><SupervisorDashboard /></Gate>} />
           <Route path="/supervisor/audit" element={<Gate><SupervisorAudit /></Gate>} />

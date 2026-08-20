@@ -1,14 +1,32 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Navigation, Phone, Camera, Check } from "lucide-react";
+import { ArrowLeft, Navigation, Phone, Camera, Check, Share2 } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { uploadPhoto } from "../../lib/uploadPhoto";
-import type { ExecutionStage, Job, JobPhoto, PaymentMethod, PhotoDirection, PhotoPhase } from "../../lib/types";
+import type {
+  ExecutionStage,
+  Job,
+  JobFailureReason,
+  JobPhoto,
+  PaymentMethod,
+  PhotoDirection,
+  PhotoPhase,
+} from "../../lib/types";
 
 const PAYMENT_METHOD_LABEL: Record<PaymentMethod, string> = {
   cash: "Cash",
   upi: "UPI",
   link: "Send Link",
+};
+
+const FAILURE_REASON_LABEL: Record<JobFailureReason, string> = {
+  customer_unavailable: "Customer Unavailable",
+  vehicle_unavailable: "Vehicle Unavailable",
+  equipment_failure: "Equipment Failure",
+  weather: "Weather",
+  safety: "Safety",
+  access_denied: "Access Denied",
+  other: "Other",
 };
 
 const STAGES: { key: ExecutionStage; label: string }[] = [
@@ -132,6 +150,14 @@ export default function ActiveWash() {
   const [preDamageBusy, setPreDamageBusy] = useState(false);
   const [preDamageSent, setPreDamageSent] = useState(false);
   const preDamageInputRef = useRef<HTMLInputElement>(null);
+
+  const [failOpen, setFailOpen] = useState(false);
+  const [failReason, setFailReason] = useState<JobFailureReason | null>(null);
+  const [failAutoReschedule, setFailAutoReschedule] = useState(false);
+  const [failBusy, setFailBusy] = useState(false);
+  const [failError, setFailError] = useState<string | null>(null);
+
+  const [linkCopied, setLinkCopied] = useState(false);
 
   useEffect(() => {
     if (!jobId) return;
@@ -279,6 +305,37 @@ export default function ActiveWash() {
     }
   }
 
+  async function markFailed() {
+    if (!job || !failReason) return;
+    setFailBusy(true);
+    setFailError(null);
+    try {
+      const { error } = await supabase
+        .from("jobs")
+        .update({ status: "issue", failure_reason: failReason, auto_reschedule: failAutoReschedule })
+        .eq("id", job.id);
+      if (error) throw error;
+      navigate("/washer/jobs");
+    } catch (err) {
+      console.error(err);
+      setFailError("Could not mark this job failed. Please try again.");
+      setFailBusy(false);
+    }
+  }
+
+  // Copies a public, unauthenticated tracking link (see src/pages/Track.tsx)
+  // — no share sheet integration, just clipboard + a brief confirmation.
+  async function shareTrackingLink() {
+    if (!job) return;
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}/track/${job.id}`);
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2500);
+    } catch (err) {
+      console.error("Could not copy tracking link", err);
+    }
+  }
+
   async function completeJob() {
     if (!job) return;
     setAdvancing(true);
@@ -320,7 +377,14 @@ export default function ActiveWash() {
         <button onClick={() => navigate("/washer/jobs")} aria-label="Back">
           <ArrowLeft className="h-5 w-5 text-gray-700" />
         </button>
-        <h1 className="text-xl font-extrabold text-gray-900">Active Wash</h1>
+        <h1 className="text-xl font-extrabold text-gray-900 flex-1">Active Wash</h1>
+        <button
+          onClick={shareTrackingLink}
+          className="flex items-center gap-1 text-xs font-bold text-blue-600 shrink-0"
+        >
+          <Share2 className="h-3.5 w-3.5" />
+          {linkCopied ? "Copied!" : "Share Tracking Link"}
+        </button>
       </div>
 
       <div className="rounded-2xl bg-gray-100 p-4">
@@ -336,6 +400,58 @@ export default function ActiveWash() {
       <Stepper stage={job.execution_stage} />
 
       {error && <div className="rounded-2xl bg-red-50 text-red-600 text-sm px-4 py-3">{error}</div>}
+
+      {!failOpen ? (
+        <button onClick={() => setFailOpen(true)} className="text-sm font-bold text-red-600">
+          Mark as Failed
+        </button>
+      ) : (
+        <div className="rounded-2xl bg-gray-100 p-4 space-y-3">
+          <p className="text-xs font-bold text-gray-900 uppercase tracking-wide">Why did this job fail?</p>
+          <div className="grid grid-cols-2 gap-2">
+            {(Object.keys(FAILURE_REASON_LABEL) as JobFailureReason[]).map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setFailReason(r)}
+                className={`rounded-xl px-3 py-2 text-xs font-bold text-left ${
+                  failReason === r ? "bg-red-600 text-white" : "bg-white text-gray-700 border border-gray-200"
+                }`}
+              >
+                {FAILURE_REASON_LABEL[r]}
+              </button>
+            ))}
+          </div>
+          <label className="flex items-center gap-2 text-sm text-gray-700">
+            <input
+              type="checkbox"
+              checked={failAutoReschedule}
+              onChange={(e) => setFailAutoReschedule(e.target.checked)}
+              className="h-4 w-4 rounded border-gray-300"
+            />
+            Auto-reschedule to next open slot today
+          </label>
+          {failError && <p className="text-sm text-red-600">{failError}</p>}
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                setFailOpen(false);
+                setFailReason(null);
+              }}
+              className="flex-1 rounded-xl border border-gray-300 text-gray-700 font-bold py-2.5"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={markFailed}
+              disabled={!failReason || failBusy}
+              className="flex-1 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-bold py-2.5"
+            >
+              {failBusy ? "Saving…" : "Confirm Failed"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {job.execution_stage === "assigned" && (
         <button

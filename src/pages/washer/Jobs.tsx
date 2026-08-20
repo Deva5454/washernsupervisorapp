@@ -4,7 +4,7 @@ import { AlertTriangle, Star } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabase";
 import { DAILY_UNIT_TARGET, formatUnits, weightedUnits } from "../../lib/incentive";
-import type { Job, JobStatus } from "../../lib/types";
+import type { Job, JobFailureReason, JobStatus } from "../../lib/types";
 
 const STATUS_STYLE: Record<JobStatus, string> = {
   pending: "border border-blue-600 text-blue-600",
@@ -17,7 +17,17 @@ const STATUS_LABEL: Record<JobStatus, string> = {
   pending: "Pending",
   in_progress: "In Progress",
   done: "Done",
-  issue: "Issue",
+  issue: "Failed",
+};
+
+const FAILURE_REASON_LABEL: Record<JobFailureReason, string> = {
+  customer_unavailable: "Customer Unavailable",
+  vehicle_unavailable: "Vehicle Unavailable",
+  equipment_failure: "Equipment Failure",
+  weather: "Weather",
+  safety: "Safety",
+  access_denied: "Access Denied",
+  other: "Other",
 };
 
 function StatusBadge({ status }: { status: JobStatus }) {
@@ -63,6 +73,88 @@ function JobCard({ job, onClick, actions }: { job: Job; onClick?: () => void; ac
   );
 }
 
+// Inline form used from the Active tab — tapping "Mark as Failed" on a
+// job opens this in place rather than navigating away, so the washer
+// doesn't lose their spot in the list.
+function MarkFailedForm({
+  job,
+  onCancel,
+  onDone,
+}: {
+  job: Job;
+  onCancel: () => void;
+  onDone: () => void;
+}) {
+  const [reason, setReason] = useState<JobFailureReason | null>(null);
+  const [autoReschedule, setAutoReschedule] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit() {
+    if (!reason) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const { error } = await supabase
+        .from("jobs")
+        .update({ status: "issue", failure_reason: reason, auto_reschedule: autoReschedule })
+        .eq("id", job.id);
+      if (error) throw error;
+      onDone();
+    } catch (err) {
+      console.error(err);
+      setError("Could not mark this job failed. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div onClick={(e) => e.stopPropagation()} className="mt-3 rounded-xl bg-white border border-gray-200 p-3 space-y-3">
+      <p className="text-xs font-bold text-gray-900 uppercase tracking-wide">Why did this job fail?</p>
+      <div className="grid grid-cols-2 gap-2">
+        {(Object.keys(FAILURE_REASON_LABEL) as JobFailureReason[]).map((r) => (
+          <button
+            key={r}
+            type="button"
+            onClick={() => setReason(r)}
+            className={`rounded-xl px-3 py-2 text-xs font-bold text-left ${
+              reason === r ? "bg-red-600 text-white" : "bg-gray-100 text-gray-700"
+            }`}
+          >
+            {FAILURE_REASON_LABEL[r]}
+          </button>
+        ))}
+      </div>
+      <label className="flex items-center gap-2 text-sm text-gray-700">
+        <input
+          type="checkbox"
+          checked={autoReschedule}
+          onChange={(e) => setAutoReschedule(e.target.checked)}
+          className="h-4 w-4 rounded border-gray-300"
+        />
+        Auto-reschedule to next open slot today
+      </label>
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      <div className="flex gap-2">
+        <button
+          onClick={onCancel}
+          className="flex-1 rounded-xl border border-gray-300 text-gray-700 font-bold py-2.5"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={submit}
+          disabled={!reason || busy}
+          className="flex-1 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-bold py-2.5"
+        >
+          {busy ? "Saving…" : "Confirm Failed"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 type Tab = "active" | "upcoming" | "completed";
 
 export default function Jobs() {
@@ -74,6 +166,7 @@ export default function Jobs() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [startingId, setStartingId] = useState<string | null>(null);
+  const [failingId, setFailingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!profile) return;
@@ -196,7 +289,31 @@ export default function Jobs() {
                 key={job.id}
                 job={job}
                 onClick={() => navigate(`/washer/active-wash/${job.id}`)}
-                actions={<p className="mt-3 text-center text-sm font-bold text-blue-600">Tap to continue →</p>}
+                actions={
+                  failingId === job.id ? (
+                    <MarkFailedForm
+                      job={job}
+                      onCancel={() => setFailingId(null)}
+                      onDone={() => {
+                        setFailingId(null);
+                        load();
+                      }}
+                    />
+                  ) : (
+                    <div className="mt-3 space-y-2">
+                      <p className="text-center text-sm font-bold text-blue-600">Tap to continue →</p>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setFailingId(job.id);
+                        }}
+                        className="w-full rounded-xl border-2 border-red-600 text-red-600 font-bold py-2"
+                      >
+                        Mark as Failed
+                      </button>
+                    </div>
+                  )
+                }
               />
             ))}
           </div>

@@ -1,17 +1,30 @@
 import { useEffect, useState } from "react";
-import { Repeat, Scan } from "lucide-react";
+import { PackagePlus, Repeat, Scan } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabase";
-import type { ClothUnit, StockItem } from "../../lib/types";
+import type { ClothUnit, RequestStatus, StockItem, StockRequest } from "../../lib/types";
+
+const STOCK_REQUEST_STATUS_STYLE: Record<RequestStatus, string> = {
+  pending: "text-blue-600",
+  approved: "text-green-600",
+  rejected: "text-red-600",
+};
 
 export default function Stock() {
   const { profile } = useAuth();
   const [items, setItems] = useState<StockItem[]>([]);
   const [clothUnits, setClothUnits] = useState<ClothUnit[]>([]);
+  const [stockRequests, setStockRequests] = useState<StockRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [requesting, setRequesting] = useState(false);
-  const [requestSent, setRequestSent] = useState(false);
+
+  const [replenishOpen, setReplenishOpen] = useState(false);
+  const [replenishMaterial, setReplenishMaterial] = useState("");
+  const [replenishQty, setReplenishQty] = useState("");
+  const [replenishReason, setReplenishReason] = useState("");
+  const [replenishBusy, setReplenishBusy] = useState(false);
+  const [replenishError, setReplenishError] = useState<string | null>(null);
+  const [replenishSent, setReplenishSent] = useState(false);
 
   const [exchangeOpen, setExchangeOpen] = useState(false);
   const [usedReturned, setUsedReturned] = useState("");
@@ -36,14 +49,22 @@ export default function Stock() {
     setLoading(true);
     setError(null);
     try {
-      const [stockRes, clothRes] = await Promise.all([
+      const [stockRes, clothRes, requestsRes] = await Promise.all([
         supabase.from("stock_items").select("*").eq("washer_id", profile.id).order("material_name"),
         supabase.from("cloth_units").select("*").eq("washer_id", profile.id).order("updated_at", { ascending: false }),
+        supabase
+          .from("stock_requests")
+          .select("*")
+          .eq("profile_id", profile.id)
+          .order("created_at", { ascending: false })
+          .limit(5),
       ]);
       if (stockRes.error) throw stockRes.error;
       if (clothRes.error) throw clothRes.error;
+      if (requestsRes.error) throw requestsRes.error;
       setItems((stockRes.data ?? []) as StockItem[]);
       setClothUnits((clothRes.data ?? []) as ClothUnit[]);
+      setStockRequests((requestsRes.data ?? []) as StockRequest[]);
     } catch (err) {
       console.error(err);
       setError("Could not load stock.");
@@ -124,23 +145,32 @@ export default function Stock() {
     }
   }
 
-  async function requestReplenishment() {
-    if (!profile) return;
-    setRequesting(true);
-    setRequestSent(false);
-    setError(null);
+  async function submitReplenishment() {
+    if (!profile || !replenishMaterial || !replenishQty) return;
+    const qty = Number(replenishQty);
+    if (!Number.isFinite(qty) || qty <= 0) return;
+    setReplenishBusy(true);
+    setReplenishError(null);
+    setReplenishSent(false);
     try {
-      const { error } = await supabase.from("issues").insert({
-        reported_by: profile.id,
-        title: "Stock replenishment requested",
+      const { error } = await supabase.from("stock_requests").insert({
+        profile_id: profile.id,
+        material_name: replenishMaterial,
+        requested_qty: qty,
+        reason: replenishReason.trim() || null,
       });
       if (error) throw error;
-      setRequestSent(true);
+      setReplenishSent(true);
+      setReplenishMaterial("");
+      setReplenishQty("");
+      setReplenishReason("");
+      setReplenishOpen(false);
+      await load();
     } catch (err) {
       console.error(err);
-      setError("Could not send the request. Please try again.");
+      setReplenishError("Could not send the request. Please try again.");
     } finally {
-      setRequesting(false);
+      setReplenishBusy(false);
     }
   }
 
@@ -351,17 +381,84 @@ export default function Stock() {
         </div>
       )}
 
-      <button
-        onClick={requestReplenishment}
-        disabled={requesting}
-        className="w-full rounded-2xl border-2 border-gray-900 text-gray-900 font-extrabold py-4 disabled:opacity-50"
-      >
-        {requesting ? "Sending…" : "Request Replenishment"}
-      </button>
+      <div className="rounded-2xl bg-gray-100 px-4 py-4">
+        <button
+          onClick={() => {
+            setReplenishOpen((v) => !v);
+            setReplenishError(null);
+            if (!replenishMaterial && items.length > 0) setReplenishMaterial(items[0].material_name);
+          }}
+          className="w-full flex items-center justify-between"
+        >
+          <span className="flex items-center gap-2 font-bold text-gray-900">
+            <PackagePlus className="h-4 w-4 text-blue-600" />
+            Request Replenishment
+          </span>
+          <span className="text-sm text-blue-600 font-bold">{replenishOpen ? "Close" : "Request"}</span>
+        </button>
 
-      {requestSent && (
+        {replenishOpen && (
+          <div className="mt-4 pt-4 border-t border-gray-200 space-y-3">
+            <select
+              value={replenishMaterial}
+              onChange={(e) => setReplenishMaterial(e.target.value)}
+              className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm bg-white"
+            >
+              <option value="">Select item…</option>
+              {items.map((item) => (
+                <option key={item.id} value={item.material_name}>
+                  {item.material_name}
+                </option>
+              ))}
+            </select>
+            <input
+              type="number"
+              min={0}
+              value={replenishQty}
+              onChange={(e) => setReplenishQty(e.target.value)}
+              placeholder="Quantity needed"
+              className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-600"
+            />
+            <input
+              type="text"
+              value={replenishReason}
+              onChange={(e) => setReplenishReason(e.target.value)}
+              placeholder="Reason (optional)"
+              className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-600"
+            />
+            {replenishError && <p className="text-sm text-red-600">{replenishError}</p>}
+            <button
+              onClick={submitReplenishment}
+              disabled={!replenishMaterial || !replenishQty || replenishBusy}
+              className="w-full rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold py-2.5"
+            >
+              {replenishBusy ? "Sending…" : "Send Request"}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {replenishSent && (
         <div className="rounded-2xl bg-green-50 text-green-700 text-sm px-4 py-3 text-center">
           Request sent to your supervisor.
+        </div>
+      )}
+
+      {stockRequests.length > 0 && (
+        <div className="rounded-2xl bg-gray-100 px-4 py-4">
+          <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Recent Requests</p>
+          <div className="space-y-2">
+            {stockRequests.map((r) => (
+              <div key={r.id} className="flex items-center justify-between text-sm">
+                <span className="text-gray-700">
+                  {r.material_name} · {r.requested_qty}
+                </span>
+                <span className={`font-bold ${STOCK_REQUEST_STATUS_STYLE[r.status]}`}>
+                  {r.status[0].toUpperCase() + r.status.slice(1)}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>

@@ -33,6 +33,18 @@
 --     columns on audits, and the leave_balances / leave_requests tables)
 --   - supabase_selfservice_migration.sql (had v8, missing
 --     regularization_requests / payslips / expense_claims / tax_documents)
+--   - supabase_washergaps_migration.sql (had v9, missing jobs.failure_reason
+--     / auto_reschedule, and the stock_requests / demo_requests tables)
+--   - supabase_supervisorstock_migration.sql (had v10, missing issues.qty_deducted
+--     / routing_status, and the stock_receipts / supervisor_stock /
+--     material_issuances / uniform_issuances tables)
+--   - supabase_supervisorassign_migration.sql (had v11, missing the
+--     cash_registers / subscription_cash_deposits tables)
+--   - supabase_supervisoroversight_migration.sql (had v12, missing
+--     audits.gps_exception_reason / photo_authenticity_*,
+--     attendance.supervisor_note, and the periodic_schedules /
+--     daily_flow_progress / activity_log / escalations /
+--     schedule_pauses / batch_invalidations tables)
 -- ============================================================
 
 create extension if not exists "pgcrypto";
@@ -66,6 +78,9 @@ create table if not exists jobs (
   package_name text not null,
   area text not null,
   city text not null default 'Pune',
+  -- 'issue' now doubles as "Failed" — a washer couldn't complete the
+  -- job at all (see failure_reason), distinct from a mid-wash incident
+  -- report which stays in the separate `issues` table.
   status text not null default 'pending' check (status in ('pending', 'in_progress', 'done', 'issue')),
   -- Granular position within an in-progress visit — only meaningful
   -- once status = 'in_progress'; the Jobs list only cares about status.
@@ -90,6 +105,16 @@ create table if not exists jobs (
   -- Latest reassignment reason, not a history — matches this app's
   -- existing "no audit trail" approach to overrides.
   override_reason text,
+  -- Set when a washer marks the job Failed (status → 'issue') instead
+  -- of completing it — why it couldn't be done, and whether it should
+  -- be auto-slotted into the next open slot today.
+  failure_reason text check (
+    failure_reason in (
+      'customer_unavailable', 'vehicle_unavailable', 'equipment_failure',
+      'weather', 'safety', 'access_denied', 'other'
+    )
+  ),
+  auto_reschedule boolean not null default false,
   job_date date not null default current_date,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
@@ -114,6 +139,9 @@ create table if not exists attendance (
   -- sets this (their "Unlock Check-In" action) — a scaled-down version
   -- of the ERP's City-Manager GPS-violation approval.
   gps_unlock_approved_at timestamptz,
+  -- Freeform note a supervisor can leave against a specific day's
+  -- attendance row — visible only supervisor-side, not to the washer.
+  supervisor_note text,
   created_at timestamptz default now(),
   unique (washer_id, date)
 );
@@ -164,6 +192,17 @@ create table if not exists issues (
   -- always are; general incidents usually aren't).
   job_id uuid references jobs(id) on delete set null,
   photo_url text,
+  -- Real inventory consequence of a broken_part / lost_damaged_bottle
+  -- report: how much was deducted from the reported-on washer's own
+  -- stock_items (null/0 when the report has no stock impact).
+  qty_deducted numeric,
+  -- Repair-request routing through Branch → Central, and whether a
+  -- spare was already issued from branch stock while the repair is
+  -- pending. Irrelevant to the other categories, stays 'none' for them.
+  routing_status text not null default 'none' check (
+    routing_status in ('none', 'pending_branch', 'pending_central', 'resolved')
+  ),
+  spare_issued boolean not null default false,
   created_at timestamptz default now(),
   resolved_at timestamptz
 );
@@ -191,7 +230,15 @@ create table if not exists audits (
   total_score int,
   grade text check (grade is null or grade in ('pass', 'minor', 'major', 'failed')),
   notes text,
-  checklist jsonb
+  checklist jsonb,
+  -- Lets a supervisor complete an audit outside the ideal GPS range with
+  -- a logged reason, instead of silently allowing or hard-blocking it.
+  gps_exception_reason text,
+  -- Whole-audit flag (checklist.photos is a plain URL array, not rows,
+  -- so this isn't per-photo) for when a photo's timestamp/GPS looks
+  -- inconsistent with the audit's own location/time.
+  photo_authenticity_flagged boolean not null default false,
+  photo_authenticity_note text
 );
 
 create table if not exists alerts (
@@ -378,6 +425,198 @@ create table if not exists tax_documents (
   uploaded_at timestamptz default now()
 );
 
+-- A washer requesting more of a specific material than they currently
+-- hold. Also reused by supervisors requesting a refill of their own
+-- buffer stock from Branch — same shape, different requester role.
+create table if not exists stock_requests (
+  id uuid primary key default gen_random_uuid(),
+  profile_id uuid not null references profiles(id) on delete cascade,
+  material_name text not null,
+  requested_qty numeric not null,
+  reason text,
+  status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
+  created_at timestamptz default now(),
+  resolved_at timestamptz
+);
+
+-- Sales/subscription "demo" visit assignments routed to a washer, who
+-- can accept or decline — distinct from a regular paid wash job.
+create table if not exists demo_requests (
+  id uuid primary key default gen_random_uuid(),
+  washer_id uuid not null references profiles(id) on delete cascade,
+  customer_name text not null,
+  customer_phone text,
+  vehicle_info text,
+  area text,
+  scheduled_time text,
+  status text not null default 'pending' check (status in ('pending', 'accepted', 'declined')),
+  created_at timestamptz default now(),
+  resolved_at timestamptz
+);
+
+-- Confirms a real Branch → supervisor stock transfer against a challan
+-- number. Separate from stock_items (washer-held) and supervisor_stock
+-- (the supervisor's own buffer, credited from here).
+create table if not exists stock_receipts (
+  id uuid primary key default gen_random_uuid(),
+  supervisor_id uuid not null references profiles(id) on delete cascade,
+  challan_number text not null,
+  material_name text not null,
+  received_qty numeric not null default 0,
+  damaged_qty numeric not null default 0,
+  shortfall_notes text,
+  received_at timestamptz default now()
+);
+
+-- A supervisor's own held buffer of consumables/equipment, issued out
+-- to individual washers via material_issuances below.
+create table if not exists supervisor_stock (
+  id uuid primary key default gen_random_uuid(),
+  supervisor_id uuid not null references profiles(id) on delete cascade,
+  material_name text not null,
+  buffer_qty numeric not null default 0,
+  unit text not null default 'unit',
+  updated_at timestamptz default now(),
+  unique (supervisor_id, material_name)
+);
+
+create table if not exists material_issuances (
+  id uuid primary key default gen_random_uuid(),
+  supervisor_id uuid not null references profiles(id) on delete cascade,
+  washer_id uuid not null references profiles(id) on delete cascade,
+  material_name text not null,
+  qty numeric not null,
+  issued_at timestamptz default now()
+);
+
+-- Annual uniform entitlement (2/year, tracked against each person's own
+-- join-date anniversary — computed client-side from profiles.created_at,
+-- no separate anniversary column needed) plus damaged-uniform
+-- replacement, which requires the old item's return before a new one
+-- is issued from branch stock.
+create table if not exists uniform_issuances (
+  id uuid primary key default gen_random_uuid(),
+  profile_id uuid not null references profiles(id) on delete cascade,
+  issued_by uuid not null references profiles(id) on delete cascade,
+  reason text not null check (reason in ('entitlement', 'replacement')),
+  notes text,
+  damaged_returned boolean not null default false,
+  created_at timestamptz default now()
+);
+
+-- Closes out one supervisor's shift: groups all doorstep collections by
+-- mode for that shift_date and requires a deposit reference before it
+-- can be submitted. Distinct from cash_deposits, which reconciles a
+-- single washer's cash against a deposit — this is the whole shift.
+create table if not exists cash_registers (
+  id uuid primary key default gen_random_uuid(),
+  supervisor_id uuid not null references profiles(id) on delete cascade,
+  shift_date date not null default current_date,
+  cash_total numeric not null default 0,
+  upi_total numeric not null default 0,
+  link_total numeric not null default 0,
+  deposit_reference text not null,
+  submitted_at timestamptz default now(),
+  unique (supervisor_id, shift_date)
+);
+
+-- Cash collected directly from a customer for a subscription payment
+-- (not a doorstep wash — those go through jobs.payment_* / cash_deposits)
+-- plus the bank deposit reference for it.
+create table if not exists subscription_cash_deposits (
+  id uuid primary key default gen_random_uuid(),
+  supervisor_id uuid not null references profiles(id) on delete cascade,
+  customer_name text not null,
+  customer_phone text,
+  amount numeric not null,
+  bank_reference text,
+  notes text,
+  deposited_at timestamptz default now()
+);
+
+-- Customers on a recurring service plan, tracked for the next 7 days'
+-- due dates and their monthly usage cap. Not tied to a `customers`
+-- table (this app has none — customer identity lives inline on jobs
+-- too) so customer_name/phone are just plain columns here as well.
+create table if not exists periodic_schedules (
+  id uuid primary key default gen_random_uuid(),
+  customer_name text not null,
+  customer_phone text,
+  area text,
+  zone text,
+  service_name text not null,
+  frequency_days int not null default 30,
+  next_due_date date not null,
+  monthly_cap int not null default 1,
+  used_this_month int not null default 0,
+  last_serviced_at date,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+-- One row per supervisor per day, tracking which of the fixed daily
+-- process steps (defined client-side, not in the DB) they've completed.
+create table if not exists daily_flow_progress (
+  id uuid primary key default gen_random_uuid(),
+  supervisor_id uuid not null references profiles(id) on delete cascade,
+  flow_date date not null default current_date,
+  completed_steps jsonb not null default '[]'::jsonb,
+  updated_at timestamptz default now(),
+  unique (supervisor_id, flow_date)
+);
+
+-- Immutable append-only log of supervisor actions, for the Activity/
+-- Audit Trail screen. Written best-effort alongside the actions this
+-- app already performs (see lib/activityLog.ts) — not a full audit of
+-- every table write, just the supervisor-facing actions worth a trail.
+create table if not exists activity_log (
+  id uuid primary key default gen_random_uuid(),
+  actor_id uuid not null references profiles(id) on delete cascade,
+  category text not null check (category in ('attendance', 'audit', 'lead', 'cloth', 'escalation', 'other')),
+  action text not null,
+  details text,
+  gps_lat double precision,
+  gps_lng double precision,
+  gps_verified boolean not null default false,
+  created_at timestamptz default now()
+);
+
+create table if not exists escalations (
+  id uuid primary key default gen_random_uuid(),
+  raised_by uuid not null references profiles(id) on delete cascade,
+  washer_id uuid references profiles(id) on delete set null,
+  case_type text not null check (case_type in ('missed_visit_credit', 'quality_dispute', 'bonus_correction', 'other')),
+  reason text not null,
+  details text,
+  status text not null default 'pending' check (status in ('pending', 'resolved')),
+  created_at timestamptz default now(),
+  resolved_at timestamptz
+);
+
+-- An active pause has resumed_at = null. Distinct from Force Checkout
+-- (which ends today's shift) — this blocks new job scheduling for the
+-- washer until resumed.
+create table if not exists schedule_pauses (
+  id uuid primary key default gen_random_uuid(),
+  washer_id uuid not null references profiles(id) on delete cascade,
+  reason text not null,
+  paused_by uuid not null references profiles(id) on delete cascade,
+  paused_at timestamptz default now(),
+  resumed_at timestamptz
+);
+
+-- Logs a batch invalidation. This app has no real "batch" concept
+-- feeding job creation (jobs.batch_id doesn't exist), so this is
+-- honestly scoped as a standalone logged action, not something that
+-- cascades to reassign/cancel real jobs sharing a batch.
+create table if not exists batch_invalidations (
+  id uuid primary key default gen_random_uuid(),
+  batch_id text not null,
+  reason text not null,
+  invalidated_by uuid not null references profiles(id) on delete cascade,
+  created_at timestamptz default now()
+);
+
 -- ── Row Level Security — open to the anon key ───────────────────
 -- No login means no auth.uid() to scope by, so every policy here is a
 -- flat "yes" for anyone holding the anon key. See the file header for
@@ -405,6 +644,20 @@ alter table regularization_requests enable row level security;
 alter table payslips enable row level security;
 alter table expense_claims enable row level security;
 alter table tax_documents enable row level security;
+alter table stock_requests enable row level security;
+alter table demo_requests enable row level security;
+alter table stock_receipts enable row level security;
+alter table supervisor_stock enable row level security;
+alter table material_issuances enable row level security;
+alter table uniform_issuances enable row level security;
+alter table cash_registers enable row level security;
+alter table subscription_cash_deposits enable row level security;
+alter table periodic_schedules enable row level security;
+alter table daily_flow_progress enable row level security;
+alter table activity_log enable row level security;
+alter table escalations enable row level security;
+alter table schedule_pauses enable row level security;
+alter table batch_invalidations enable row level security;
 
 create policy "anon_all_profiles"   on profiles      for all to anon using (true) with check (true);
 create policy "anon_all_jobs"       on jobs          for all to anon using (true) with check (true);
@@ -428,6 +681,20 @@ create policy "anon_all_regularization_requests" on regularization_requests for 
 create policy "anon_all_payslips" on payslips for all to anon using (true) with check (true);
 create policy "anon_all_expense_claims" on expense_claims for all to anon using (true) with check (true);
 create policy "anon_all_tax_documents" on tax_documents for all to anon using (true) with check (true);
+create policy "anon_all_stock_requests" on stock_requests for all to anon using (true) with check (true);
+create policy "anon_all_demo_requests" on demo_requests for all to anon using (true) with check (true);
+create policy "anon_all_stock_receipts" on stock_receipts for all to anon using (true) with check (true);
+create policy "anon_all_supervisor_stock" on supervisor_stock for all to anon using (true) with check (true);
+create policy "anon_all_material_issuances" on material_issuances for all to anon using (true) with check (true);
+create policy "anon_all_uniform_issuances" on uniform_issuances for all to anon using (true) with check (true);
+create policy "anon_all_cash_registers" on cash_registers for all to anon using (true) with check (true);
+create policy "anon_all_subscription_cash_deposits" on subscription_cash_deposits for all to anon using (true) with check (true);
+create policy "anon_all_periodic_schedules" on periodic_schedules for all to anon using (true) with check (true);
+create policy "anon_all_daily_flow_progress" on daily_flow_progress for all to anon using (true) with check (true);
+create policy "anon_all_activity_log" on activity_log for all to anon using (true) with check (true);
+create policy "anon_all_escalations" on escalations for all to anon using (true) with check (true);
+create policy "anon_all_schedule_pauses" on schedule_pauses for all to anon using (true) with check (true);
+create policy "anon_all_batch_invalidations" on batch_invalidations for all to anon using (true) with check (true);
 
 -- Storage: a public bucket for check-in selfies + job proof-of-work photos.
 insert into storage.buckets (id, name, public)
@@ -460,6 +727,22 @@ create index if not exists idx_regularization_requests_profile on regularization
 create index if not exists idx_payslips_profile on payslips(profile_id, month desc);
 create index if not exists idx_expense_claims_profile on expense_claims(profile_id, created_at desc);
 create index if not exists idx_tax_documents_profile on tax_documents(profile_id);
+create index if not exists idx_stock_requests_profile on stock_requests(profile_id, created_at desc);
+create index if not exists idx_demo_requests_washer on demo_requests(washer_id, created_at desc);
+create index if not exists idx_stock_receipts_supervisor on stock_receipts(supervisor_id, received_at desc);
+create index if not exists idx_supervisor_stock_supervisor on supervisor_stock(supervisor_id);
+create index if not exists idx_material_issuances_supervisor on material_issuances(supervisor_id, issued_at desc);
+create index if not exists idx_material_issuances_washer on material_issuances(washer_id, issued_at desc);
+create index if not exists idx_uniform_issuances_profile on uniform_issuances(profile_id, created_at desc);
+create index if not exists idx_cash_registers_supervisor on cash_registers(supervisor_id, shift_date desc);
+create index if not exists idx_subscription_cash_deposits_supervisor on subscription_cash_deposits(supervisor_id, deposited_at desc);
+create index if not exists idx_periodic_schedules_due on periodic_schedules(next_due_date);
+create index if not exists idx_daily_flow_progress_supervisor on daily_flow_progress(supervisor_id, flow_date desc);
+create index if not exists idx_activity_log_actor on activity_log(actor_id, created_at desc);
+create index if not exists idx_activity_log_category on activity_log(category, created_at desc);
+create index if not exists idx_escalations_status on escalations(status, created_at desc);
+create index if not exists idx_schedule_pauses_washer on schedule_pauses(washer_id, resumed_at);
+create index if not exists idx_batch_invalidations_batch on batch_invalidations(batch_id);
 
 -- ── Seed the two people the app needs to show something real ───
 -- Same names as the reference prototype. Safe to run more than once.
@@ -471,7 +754,7 @@ insert into profiles (full_name, role, zone)
 select 'Priya Sharma', 'supervisor', 'Zone 4'
 where not exists (select 1 from profiles where full_name = 'Priya Sharma');
 
--- Done: 22 tables, 22 RLS policies, 1 storage bucket, 20 indexes, 2 seeded profiles.
+-- Done: 36 tables, 36 RLS policies, 1 storage bucket, 36 indexes, 2 seeded profiles.
 -- (issues.category / issues.item_name added for supervisor incident reports.
 --  jobs.vehicle_type / payment_* , attendance.gps_unlock_approved_at, and
 --  cloth_units added for washer-side weighted units / payments / cloth
@@ -482,4 +765,18 @@ where not exists (select 1 from profiles where full_name = 'Priya Sharma');
 --  leave_requests add formal CL/PL/SL/UL leave, distinct from the
 --  simpler Request Cover flow. regularization_requests / payslips /
 --  expense_claims / tax_documents add self-service items available to
---  BOTH roles, not just washers — a supervisor is an employee too.)
+--  BOTH roles, not just washers — a supervisor is an employee too.
+--  jobs.failure_reason / auto_reschedule let a washer mark a job Failed
+--  (reusing the previously-unused 'issue' status), and stock_requests /
+--  demo_requests round out the washer-side ERP-parity gap sweep.
+--  issues.qty_deducted / routing_status / spare_issued, plus
+--  stock_receipts / supervisor_stock / material_issuances /
+--  uniform_issuances, round out the supervisor-side stock/inventory
+--  ERP-parity gap sweep. cash_registers / subscription_cash_deposits
+--  add shift-level cash reconciliation and subscription collections —
+--  job assignment and job-history browsing reuse the existing jobs
+--  table, no schema needed for those. audits.gps_exception_reason /
+--  photo_authenticity_*, attendance.supervisor_note, and
+--  periodic_schedules / daily_flow_progress / activity_log /
+--  escalations / schedule_pauses / batch_invalidations round out the
+--  supervisor-side scheduling/oversight ERP-parity gap sweep.)

@@ -1,10 +1,34 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { CalendarDays, Package, MessageSquare } from "lucide-react";
+import { CalendarDays, Clock, FileText, Package, MessageSquare } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabase";
 import { CheckInPanel } from "../../components/CheckInPanel";
 import { DAILY_UNIT_TARGET, formatUnits, weightedUnits } from "../../lib/incentive";
+
+const EARNING_WINDOW_MS = 4 * 60 * 60 * 1000;
+
+// Purely informational — nothing else in this app currently gates on
+// time-bands, so this only ever displays a status, it never blocks or
+// hides functionality based on the window being open or closed.
+function EarningWindowBanner({ checkInTime }: { checkInTime: string }) {
+  const closesAt = new Date(new Date(checkInTime).getTime() + EARNING_WINDOW_MS);
+  const closed = Date.now() >= closesAt.getTime();
+  return (
+    <div
+      className={`rounded-2xl px-4 py-3 flex items-center gap-2 ${
+        closed ? "bg-gray-100" : "bg-blue-50"
+      }`}
+    >
+      <Clock className={`h-4 w-4 shrink-0 ${closed ? "text-gray-400" : "text-blue-600"}`} />
+      <p className={`text-sm font-medium ${closed ? "text-gray-500" : "text-blue-700"}`}>
+        {closed
+          ? "Earning window closed for today"
+          : `Earning window closes at ${closesAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}
+      </p>
+    </div>
+  );
+}
 
 function getGreeting() {
   const hour = new Date().getHours();
@@ -23,7 +47,7 @@ function initialsOf(name: string) {
 }
 
 export default function Home() {
-  const { profile } = useAuth();
+  const { profile, todayAttendance } = useAuth();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [totalJobs, setTotalJobs] = useState(0);
@@ -111,6 +135,8 @@ export default function Home() {
 
       <CheckInPanel />
 
+      {todayAttendance?.check_in_time && <EarningWindowBanner checkInTime={todayAttendance.check_in_time} />}
+
       <div className="rounded-3xl bg-gradient-to-br from-navy to-brand text-white px-5 py-6 shadow-lg shadow-brand/20">
         <p className="text-xs font-bold tracking-widest text-blue-400 uppercase">Today</p>
         <p className="text-3xl font-extrabold mt-1">
@@ -131,7 +157,7 @@ export default function Home() {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 gap-3">
         <Link
           to="/washer/jobs"
           className="rounded-2xl border border-gray-200 bg-white py-5 flex flex-col items-center gap-2"
@@ -152,6 +178,13 @@ export default function Home() {
         >
           <MessageSquare className="w-5 h-5 text-gray-700" />
           <span className="text-sm font-bold text-gray-900">Requests</span>
+        </Link>
+        <Link
+          to="/washer/day-summary"
+          className="rounded-2xl border border-gray-200 bg-white py-5 flex flex-col items-center gap-2"
+        >
+          <FileText className="w-5 h-5 text-gray-700" />
+          <span className="text-sm font-bold text-gray-900">Today's Summary</span>
         </Link>
       </div>
     </div>
