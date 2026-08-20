@@ -35,10 +35,16 @@ export default function Notifications() {
 
       const unreadIds = rows.filter((n) => !n.read_at).map((n) => n.id);
       if (unreadIds.length) {
-        await supabase
+        const readAt = new Date().toISOString();
+        const { error: markErr } = await supabase
           .from("notifications")
-          .update({ read_at: new Date().toISOString() })
+          .update({ read_at: readAt })
           .in("id", unreadIds);
+        if (!markErr) {
+          setItems((prev) =>
+            prev.map((n) => (unreadIds.includes(n.id) ? { ...n, read_at: readAt } : n))
+          );
+        }
       }
     } catch (err) {
       console.error(err);

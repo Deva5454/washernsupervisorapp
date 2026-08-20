@@ -4,6 +4,7 @@ import { AlertTriangle, Star } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabase";
 import { DAILY_UNIT_TARGET, formatUnits, weightedUnits } from "../../lib/incentive";
+import { localDateISO } from "../../lib/date";
 import type { Job, JobFailureReason, JobStatus } from "../../lib/types";
 
 const STATUS_STYLE: Record<JobStatus, string> = {
@@ -179,7 +180,7 @@ export default function Jobs() {
     setLoading(true);
     setError(null);
     try {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = localDateISO();
       const thirtyDaysAgo = new Date(Date.now() - 29 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
       const [todayRes, completedRes] = await Promise.all([

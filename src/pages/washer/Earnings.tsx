@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabase";
+import { localDateISO } from "../../lib/date";
 import type { Payout } from "../../lib/types";
 
 export default function Earnings() {
@@ -19,7 +20,7 @@ export default function Earnings() {
       setLoading(true);
       setError(null);
       try {
-        const today = new Date().toISOString().slice(0, 10);
+        const today = localDateISO();
         const weekAgo = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000)
           .toISOString()
           .slice(0, 10);

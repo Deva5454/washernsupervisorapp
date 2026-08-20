@@ -4,6 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabase";
 import { DAILY_UNIT_TARGET, formatUnits, weightedUnits } from "../../lib/incentive";
+import { localDateISO } from "../../lib/date";
 import type { AttendanceStatus, Job, Payout } from "../../lib/types";
 
 const ATTENDANCE_LABEL: Record<AttendanceStatus, string> = {
@@ -32,7 +33,7 @@ export default function DaySummary() {
     setLoading(true);
     setError(null);
     try {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = localDateISO();
       const [jobsRes, payoutsRes] = await Promise.all([
         supabase.from("jobs").select("*").eq("washer_id", profile.id).eq("job_date", today),
         supabase.from("payouts").select("*").eq("washer_id", profile.id).eq("payout_date", today),

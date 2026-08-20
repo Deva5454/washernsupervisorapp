@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { PackagePlus, Repeat, Scan } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabase";
+import { logActivity } from "../../lib/activityLog";
 import type { ClothUnit, RequestStatus, StockItem, StockRequest } from "../../lib/types";
 
 const STOCK_REQUEST_STATUS_STYLE: Record<RequestStatus, string> = {
@@ -32,6 +33,7 @@ export default function Stock() {
   const [exchangeBusy, setExchangeBusy] = useState(false);
   const [exchangeError, setExchangeError] = useState<string | null>(null);
   const [exchangeSent, setExchangeSent] = useState(false);
+  const [exchangeWarning, setExchangeWarning] = useState<string | null>(null);
 
   const [checkOutBarcode, setCheckOutBarcode] = useState("");
   const [checkOutBusy, setCheckOutBusy] = useState(false);
@@ -113,6 +115,7 @@ export default function Stock() {
         if (insertErr) throw insertErr;
       }
       setCheckOutBarcode("");
+      await logActivity(profile.id, "cloth", "Cloth checked out", { details: barcode });
       await load();
     } catch (err) {
       console.error(err);
@@ -123,6 +126,7 @@ export default function Stock() {
   }
 
   async function returnCloth(unit: ClothUnit) {
+    if (!profile) return;
     setReturningId(unit.id);
     setError(null);
     try {
@@ -136,6 +140,7 @@ export default function Stock() {
         })
         .eq("id", unit.id);
       if (updateErr) throw updateErr;
+      await logActivity(profile.id, "cloth", "Cloth returned dirty", { details: unit.barcode });
       await load();
     } catch (err) {
       console.error(err);
@@ -148,7 +153,10 @@ export default function Stock() {
   async function submitReplenishment() {
     if (!profile || !replenishMaterial || !replenishQty) return;
     const qty = Number(replenishQty);
-    if (!Number.isFinite(qty) || qty <= 0) return;
+    if (!Number.isFinite(qty) || qty <= 0) {
+      setReplenishError("Enter a valid quantity.");
+      return;
+    }
     setReplenishBusy(true);
     setReplenishError(null);
     setReplenishSent(false);
@@ -183,7 +191,10 @@ export default function Stock() {
     if (!profile) return;
     const used = parseInt(usedReturned, 10);
     const received = parseInt(newReceived, 10);
-    if (!Number.isFinite(used) || used < 0 || !Number.isFinite(received) || received < 0) return;
+    if (!Number.isFinite(used) || used < 0 || !Number.isFinite(received) || received < 0) {
+      setExchangeError("Enter both quantities.");
+      return;
+    }
     if (profile.cloth_limit != null && received > profile.cloth_limit) {
       setExchangeError(`Can't exceed the hand-over limit of ${profile.cloth_limit} cloths.`);
       return;
@@ -191,6 +202,7 @@ export default function Stock() {
     setExchangeBusy(true);
     setExchangeError(null);
     setExchangeSent(false);
+    setExchangeWarning(null);
     try {
       const { error: insertErr } = await supabase.from("cloth_exchanges").insert({
         washer_id: profile.id,
@@ -206,7 +218,13 @@ export default function Stock() {
           .update({ remaining_qty: clothItem.remaining_qty + received })
           .eq("id", clothItem.id);
         if (updateErr) throw updateErr;
+      } else if (received > 0) {
+        setExchangeWarning("Hand-over logged, but no matching stock item was found to credit — check with your supervisor.");
       }
+
+      await logActivity(profile.id, "cloth", "Cloth hand-over logged", {
+        details: `Used ${used} · Received ${received}`,
+      });
 
       setExchangeSent(true);
       setUsedReturned("");
@@ -376,8 +394,12 @@ export default function Stock() {
       </div>
 
       {exchangeSent && (
-        <div className="rounded-2xl bg-green-50 text-green-700 text-sm px-4 py-3 text-center">
-          Hand-over logged.
+        <div
+          className={`rounded-2xl text-sm px-4 py-3 text-center ${
+            exchangeWarning ? "bg-amber-50 text-amber-700" : "bg-green-50 text-green-700"
+          }`}
+        >
+          {exchangeWarning ?? "Hand-over logged."}
         </div>
       )}
 

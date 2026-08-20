@@ -1,13 +1,8 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
+import { localDateISO } from "../../lib/date";
 import type { Payout, Profile } from "../../lib/types";
-
-function todayISO() {
-  const d = new Date();
-  const offset = d.getTimezoneOffset();
-  return new Date(d.getTime() - offset * 60000).toISOString().slice(0, 10);
-}
 
 // "This week" = the trailing 7-day window ending today (inclusive), the
 // simplest date range that doesn't depend on a Monday/Sunday convention.
@@ -73,7 +68,7 @@ export default function Incentive() {
         .select("*")
         .in("washer_id", washerIds)
         .gte("payout_date", weekStartISO())
-        .lte("payout_date", todayISO());
+        .lte("payout_date", localDateISO());
       if (payoutErr) throw payoutErr;
       const payouts = (payoutData as Payout[]) ?? [];
 

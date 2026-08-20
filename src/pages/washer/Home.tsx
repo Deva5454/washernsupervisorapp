@@ -5,6 +5,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabase";
 import { CheckInPanel } from "../../components/CheckInPanel";
 import { DAILY_UNIT_TARGET, formatUnits, weightedUnits } from "../../lib/incentive";
+import { localDateISO } from "../../lib/date";
 
 const EARNING_WINDOW_MS = 4 * 60 * 60 * 1000;
 
@@ -63,7 +64,7 @@ export default function Home() {
       setLoading(true);
       setError(null);
       try {
-        const today = new Date().toISOString().slice(0, 10);
+        const today = localDateISO();
         const weekAgo = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000)
           .toISOString()
           .slice(0, 10);

@@ -2,12 +2,8 @@ import { useEffect, useState, type FormEvent } from "react";
 import { MenuRow } from "../MenuRow";
 import { supabase } from "../../lib/supabase";
 import { logActivity } from "../../lib/activityLog";
+import { localDateISO } from "../../lib/date";
 import type { CashRegister } from "../../lib/types";
-
-function isoDate(d: Date) {
-  const offset = d.getTimezoneOffset();
-  return new Date(d.getTime() - offset * 60000).toISOString().slice(0, 10);
-}
 
 function grandTotal(r: CashRegister) {
   return Number(r.cash_total) + Number(r.upi_total) + Number(r.link_total);
@@ -62,7 +58,7 @@ function CashRegisterPanel({ profileId }: { profileId: string }) {
     try {
       const { error } = await supabase.from("cash_registers").insert({
         supervisor_id: profileId,
-        shift_date: isoDate(new Date()),
+        shift_date: localDateISO(),
         cash_total: Number(cashTotal) || 0,
         upi_total: Number(upiTotal) || 0,
         link_total: Number(linkTotal) || 0,

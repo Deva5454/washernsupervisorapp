@@ -15,6 +15,10 @@ function sevenDaysFromNow() {
   return isoDate(d);
 }
 
+function isSameMonth(a: Date, b: Date) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth();
+}
+
 function ScheduleRow({ schedule, onChanged }: { schedule: PeriodicSchedule; onChanged: () => void }) {
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [newDate, setNewDate] = useState(schedule.next_due_date);
@@ -132,7 +136,25 @@ function PeriodicSchedulePanel() {
       if (profile?.zone) query = query.eq("zone", profile.zone);
       const { data, error } = await query;
       if (error) throw error;
-      setSchedules((data as PeriodicSchedule[]) ?? []);
+      const rows = (data as PeriodicSchedule[]) ?? [];
+
+      // used_this_month never resets on its own (no cron/edge-function
+      // infra in this app) — reset it lazily here the first time a
+      // schedule is viewed in a new calendar month, so the cap reads as
+      // monthly rather than permanent after the first use.
+      const now = new Date();
+      const staleIds = rows
+        .filter((s) => s.used_this_month > 0 && !isSameMonth(new Date(s.updated_at), now))
+        .map((s) => s.id);
+      if (staleIds.length) {
+        const { error: resetErr } = await supabase
+          .from("periodic_schedules")
+          .update({ used_this_month: 0, updated_at: now.toISOString() })
+          .in("id", staleIds);
+        if (resetErr) throw resetErr;
+      }
+
+      setSchedules(rows.map((s) => (staleIds.includes(s.id) ? { ...s, used_this_month: 0 } : s)));
     } catch (err) {
       console.error(err);
       setLoadError("Could not load upcoming schedules.");

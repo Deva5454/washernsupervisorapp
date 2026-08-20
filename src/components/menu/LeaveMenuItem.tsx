@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { MenuRow } from "../MenuRow";
 import { supabase } from "../../lib/supabase";
+import { localDateISO } from "../../lib/date";
 import { LEAVE_TYPE_LABEL, ensureLeaveBalances, leaveDays } from "../../lib/leave";
 import type { LeaveBalance, LeaveRequest, LeaveType } from "../../lib/types";
 
@@ -111,14 +112,14 @@ function LeavePanel({ profileId }: { profileId: string }) {
                 type="date"
                 value={startDate}
                 onChange={(e) => setStartDate(e.target.value)}
-                min={new Date().toISOString().slice(0, 10)}
+                min={localDateISO()}
                 className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm bg-white"
               />
               <input
                 type="date"
                 value={endDate}
                 onChange={(e) => setEndDate(e.target.value)}
-                min={startDate || new Date().toISOString().slice(0, 10)}
+                min={startDate || localDateISO()}
                 className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm bg-white"
               />
             </div>

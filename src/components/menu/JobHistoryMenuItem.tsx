@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { MenuRow } from "../MenuRow";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
+import { localDateISO } from "../../lib/date";
 import type { Job, JobStatus, Profile } from "../../lib/types";
 
 const STATUS_LABEL: Record<JobStatus, string> = {
@@ -11,16 +12,10 @@ const STATUS_LABEL: Record<JobStatus, string> = {
   issue: "Failed",
 };
 
-// Local-timezone date string, matching the `date` columns (job_date) exactly.
-function isoDate(d: Date) {
-  const offset = d.getTimezoneOffset();
-  return new Date(d.getTime() - offset * 60000).toISOString().slice(0, 10);
-}
-
 function defaultFrom() {
   const d = new Date();
   d.setDate(d.getDate() - 30);
-  return isoDate(d);
+  return localDateISO(d);
 }
 
 function JobHistoryPanel({ profileId }: { profileId: string }) {
@@ -31,7 +26,7 @@ function JobHistoryPanel({ profileId }: { profileId: string }) {
 
   const [washerId, setWasherId] = useState("");
   const [fromDate, setFromDate] = useState(defaultFrom());
-  const [toDate, setToDate] = useState(isoDate(new Date()));
+  const [toDate, setToDate] = useState(localDateISO());
   const [jobs, setJobs] = useState<Job[]>([]);
   const [jobsLoading, setJobsLoading] = useState(false);
   const [jobsError, setJobsError] = useState<string | null>(null);

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, Camera, Car, Check } from "lucide-react";
 import { supabase } from "../../lib/supabase";
+import { useAuth } from "../../contexts/AuthContext";
 import { uploadPhoto } from "../../lib/uploadPhoto";
 import {
   GRADE_LABEL,
@@ -76,6 +77,7 @@ function ChecklistStep({
 }
 
 export default function AuditPage() {
+  const { profile } = useAuth();
   const [pendingAudits, setPendingAudits] = useState<Audit[]>([]);
   const [completedAudits, setCompletedAudits] = useState<Audit[]>([]);
   const [roster, setRoster] = useState<Profile[]>([]);
@@ -104,7 +106,8 @@ export default function AuditPage() {
 
   useEffect(() => {
     void load();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.zone]);
 
   useEffect(() => {
     if (!washerId) {
@@ -125,22 +128,39 @@ export default function AuditPage() {
     setLoading(true);
     setError(null);
     try {
-      const [pendingRes, completedRes, rosterRes] = await Promise.all([
-        supabase.from("audits").select("*").eq("audit_status", "pending").order("created_at", { ascending: true }),
-        supabase
-          .from("audits")
-          .select("*")
-          .eq("audit_status", "completed")
-          .order("completed_at", { ascending: false })
-          .limit(10),
-        supabase.from("profiles").select("*").eq("role", "washer").order("full_name"),
+      let rosterQuery = supabase.from("profiles").select("*").eq("role", "washer");
+      if (profile?.zone) rosterQuery = rosterQuery.eq("zone", profile.zone);
+
+      const rosterRes = await rosterQuery.order("full_name");
+      if (rosterRes.error) throw rosterRes.error;
+      const teamRoster = (rosterRes.data as Profile[]) ?? [];
+      const washerIds = teamRoster.map((w) => w.id);
+      const noRows = Promise.resolve({ data: [] as unknown[], error: null });
+
+      const [pendingRes, completedRes] = await Promise.all([
+        washerIds.length
+          ? supabase
+              .from("audits")
+              .select("*")
+              .eq("audit_status", "pending")
+              .in("washer_id", washerIds)
+              .order("created_at", { ascending: true })
+          : noRows,
+        washerIds.length
+          ? supabase
+              .from("audits")
+              .select("*")
+              .eq("audit_status", "completed")
+              .in("washer_id", washerIds)
+              .order("completed_at", { ascending: false })
+              .limit(10)
+          : noRows,
       ]);
       if (pendingRes.error) throw pendingRes.error;
       if (completedRes.error) throw completedRes.error;
-      if (rosterRes.error) throw rosterRes.error;
       setPendingAudits((pendingRes.data as Audit[]) ?? []);
       setCompletedAudits((completedRes.data as Audit[]) ?? []);
-      setRoster((rosterRes.data as Profile[]) ?? []);
+      setRoster(teamRoster);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load audits.");
     } finally {

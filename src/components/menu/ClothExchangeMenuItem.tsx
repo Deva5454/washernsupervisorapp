@@ -1,24 +1,48 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { MenuRow } from "../MenuRow";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
+import { logActivity } from "../../lib/activityLog";
+import type { StockItem } from "../../lib/types";
 
 // A lighter version of the hand-over form on the washer's Stock page —
-// this one just logs the exchange (cloth_exchanges), it doesn't credit
-// a stock_items row, since stock_items is washer-operational inventory
-// that a supervisor doesn't have one of.
+// mounted for both washer and supervisor More.tsx pages. For a washer,
+// this credits stock_items the same way Stock.tsx's own form does.
 function ClothExchangePanel({ profileId }: { profileId: string }) {
   const { profile } = useAuth();
+  const [items, setItems] = useState<StockItem[]>([]);
   const [usedReturned, setUsedReturned] = useState("");
   const [newReceived, setNewReceived] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
+  const [warning, setWarning] = useState<string | null>(null);
+
+  useEffect(() => {
+    void loadItems();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileId]);
+
+  async function loadItems() {
+    const { data, error: loadErr } = await supabase
+      .from("stock_items")
+      .select("*")
+      .eq("washer_id", profileId)
+      .order("material_name");
+    if (loadErr) {
+      console.error(loadErr);
+      return;
+    }
+    setItems((data ?? []) as StockItem[]);
+  }
 
   async function submit() {
     const used = parseInt(usedReturned, 10);
     const received = parseInt(newReceived, 10);
-    if (!Number.isFinite(used) || used < 0 || !Number.isFinite(received) || received < 0) return;
+    if (!Number.isFinite(used) || used < 0 || !Number.isFinite(received) || received < 0) {
+      setError("Enter both quantities.");
+      return;
+    }
     if (profile?.cloth_limit != null && received > profile.cloth_limit) {
       setError(`Can't exceed the hand-over limit of ${profile.cloth_limit} cloths.`);
       return;
@@ -26,6 +50,7 @@ function ClothExchangePanel({ profileId }: { profileId: string }) {
     setBusy(true);
     setError(null);
     setSent(false);
+    setWarning(null);
     try {
       const { error } = await supabase.from("cloth_exchanges").insert({
         washer_id: profileId,
@@ -33,9 +58,26 @@ function ClothExchangePanel({ profileId }: { profileId: string }) {
         new_received: received,
       });
       if (error) throw error;
+
+      const clothItem = items.find((i) => i.material_name.toLowerCase().includes("cloth"));
+      if (clothItem && received > 0) {
+        const { error: updateErr } = await supabase
+          .from("stock_items")
+          .update({ remaining_qty: clothItem.remaining_qty + received })
+          .eq("id", clothItem.id);
+        if (updateErr) throw updateErr;
+      } else if (received > 0) {
+        setWarning("Hand-over logged, but no matching stock item was found to credit — check with your supervisor.");
+      }
+
+      await logActivity(profileId, "cloth", "Cloth hand-over logged", {
+        details: `Used ${used} · Received ${received}`,
+      });
+
       setSent(true);
       setUsedReturned("");
       setNewReceived("");
+      await loadItems();
     } catch (err) {
       console.error(err);
       setError("Could not log the hand-over. Please try again.");
@@ -82,7 +124,11 @@ function ClothExchangePanel({ profileId }: { profileId: string }) {
       >
         {busy ? "Logging…" : "Confirm Hand-Over"}
       </button>
-      {sent && <p className="text-sm text-green-700">Hand-over logged.</p>}
+      {sent && (
+        <p className={`text-sm ${warning ? "text-amber-700" : "text-green-700"}`}>
+          {warning ?? "Hand-over logged."}
+        </p>
+      )}
     </div>
   );
 }

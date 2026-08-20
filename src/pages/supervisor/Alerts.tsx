@@ -105,52 +105,90 @@ export default function Alerts() {
       let rosterQuery = supabase.from("profiles").select("*").eq("role", "washer");
       if (profile?.zone) rosterQuery = rosterQuery.eq("zone", profile.zone);
 
-      const [
-        rosterRes,
-        jobsRes,
-        alertRes,
-        issueRes,
-        sosRes,
-        advanceRes,
-        coverRes,
-        leaveRes,
-        regularizationRes,
-        expenseRes,
-      ] = await Promise.all([
-          rosterQuery.order("full_name"),
-          supabase.from("jobs").select("*").eq("job_date", isoDate(new Date())),
-          alertQuery,
-          supabase.from("issues").select("*").eq("status", "open").order("created_at", { ascending: false }),
-          supabase.from("sos_alerts").select("*").eq("status", "active").order("created_at", { ascending: false }),
-          supabase
-            .from("advance_requests")
-            .select("*")
-            .eq("status", "pending")
-            .order("created_at", { ascending: false }),
-          supabase
-            .from("cover_requests")
-            .select("*")
-            .eq("status", "pending")
-            .order("cover_date", { ascending: true }),
-          supabase
-            .from("leave_requests")
-            .select("*")
-            .eq("status", "pending")
-            .order("start_date", { ascending: true }),
-          supabase
-            .from("regularization_requests")
-            .select("*")
-            .eq("status", "pending")
-            .order("target_date", { ascending: true }),
-          supabase
-            .from("expense_claims")
-            .select("*")
-            .eq("status", "pending")
-            .order("created_at", { ascending: false }),
-        ]);
+      const [rosterRes, alertRes] = await Promise.all([rosterQuery.order("full_name"), alertQuery]);
       if (rosterRes.error) throw rosterRes.error;
-      if (jobsRes.error) throw jobsRes.error;
       if (alertRes.error) throw alertRes.error;
+
+      const teamRoster = (rosterRes.data as Profile[]) ?? [];
+      // Everything below is scoped to this supervisor's own zone-scoped
+      // team — without this, every supervisor saw and could act on
+      // every other zone's requests (and, for the approval queues,
+      // their own). Issues also include reports the supervisor filed
+      // themselves (reported_by = profile.id when no washer is picked
+      // in the incident form), which aren't part of the washer roster.
+      const washerIds = teamRoster.map((w) => w.id);
+      const issueReporterIds = profile ? [...washerIds, profile.id] : washerIds;
+      const noRows = Promise.resolve({ data: [] as unknown[], error: null });
+
+      const [jobsRes, issueRes, sosRes, advanceRes, coverRes, leaveRes, regularizationRes, expenseRes] =
+        await Promise.all([
+          washerIds.length
+            ? supabase.from("jobs").select("*").eq("job_date", isoDate(new Date())).in("washer_id", washerIds)
+            : noRows,
+          issueReporterIds.length
+            ? supabase
+                .from("issues")
+                .select("*")
+                .eq("status", "open")
+                .in("reported_by", issueReporterIds)
+                .order("created_at", { ascending: false })
+            : noRows,
+          washerIds.length
+            ? supabase
+                .from("sos_alerts")
+                .select("*")
+                .eq("status", "active")
+                .in("washer_id", washerIds)
+                .order("created_at", { ascending: false })
+            : noRows,
+          // Advance/leave/regularization/expense are also usable by a
+          // supervisor on themselves (shared self-service components) —
+          // scoping strictly to the washer roster means those never
+          // show up here, which is deliberate: a supervisor approving
+          // their own request would be a conflict of interest, and this
+          // app has no higher role to route it to instead.
+          washerIds.length
+            ? supabase
+                .from("advance_requests")
+                .select("*")
+                .eq("status", "pending")
+                .in("washer_id", washerIds)
+                .order("created_at", { ascending: false })
+            : noRows,
+          washerIds.length
+            ? supabase
+                .from("cover_requests")
+                .select("*")
+                .eq("status", "pending")
+                .in("washer_id", washerIds)
+                .order("cover_date", { ascending: true })
+            : noRows,
+          washerIds.length
+            ? supabase
+                .from("leave_requests")
+                .select("*")
+                .eq("status", "pending")
+                .in("washer_id", washerIds)
+                .order("start_date", { ascending: true })
+            : noRows,
+          washerIds.length
+            ? supabase
+                .from("regularization_requests")
+                .select("*")
+                .eq("status", "pending")
+                .in("profile_id", washerIds)
+                .order("target_date", { ascending: true })
+            : noRows,
+          washerIds.length
+            ? supabase
+                .from("expense_claims")
+                .select("*")
+                .eq("status", "pending")
+                .in("profile_id", washerIds)
+                .order("created_at", { ascending: false })
+            : noRows,
+        ]);
+      if (jobsRes.error) throw jobsRes.error;
       if (issueRes.error) throw issueRes.error;
       if (sosRes.error) throw sosRes.error;
       if (advanceRes.error) throw advanceRes.error;
@@ -167,7 +205,7 @@ export default function Alerts() {
       const pendingRegularizations = (regularizationRes.data as RegularizationRequest[]) ?? [];
       const pendingExpenses = (expenseRes.data as ExpenseClaim[]) ?? [];
 
-      setRoster((rosterRes.data as Profile[]) ?? []);
+      setRoster(teamRoster);
       setTodaysJobs((jobsRes.data as Job[]) ?? []);
       setAlerts((alertRes.data as Alert[]) ?? []);
       setIssues(openIssues);
@@ -378,20 +416,40 @@ export default function Alerts() {
     }
   }
 
-  // Same lookup pattern as ActiveWash.tsx's deductCloths — a missing
-  // stock row shouldn't block the incident report, just skip deduction.
+  // A missing stock row shouldn't block the incident report, just skip
+  // deduction. Tries an exact name match first (deterministic); only
+  // falls back to a fuzzy match — ordered, so it's at least consistent
+  // across calls — when nothing matches exactly, since a washer could
+  // hold more than one item whose name contains the same substring.
   async function deductWasherStock(washerId: string, itemNameQuery: string, qty: number) {
     try {
-      const { data, error } = await supabase
+      const { data: exact, error: exactErr } = await supabase
         .from("stock_items")
         .select("id, remaining_qty")
         .eq("washer_id", washerId)
-        .ilike("material_name", `%${itemNameQuery}%`)
-        .limit(1)
+        .ilike("material_name", itemNameQuery)
         .maybeSingle();
-      if (error || !data) return false;
-      const next = Math.max(0, data.remaining_qty - qty);
-      const { error: updateErr } = await supabase.from("stock_items").update({ remaining_qty: next }).eq("id", data.id);
+      if (exactErr) return false;
+
+      let target = exact;
+      if (!target) {
+        const { data: fuzzy, error: fuzzyErr } = await supabase
+          .from("stock_items")
+          .select("id, remaining_qty")
+          .eq("washer_id", washerId)
+          .ilike("material_name", `%${itemNameQuery}%`)
+          .order("material_name", { ascending: true })
+          .limit(1)
+          .maybeSingle();
+        if (fuzzyErr || !fuzzy) return false;
+        target = fuzzy;
+      }
+
+      const next = Math.max(0, target.remaining_qty - qty);
+      const { error: updateErr } = await supabase
+        .from("stock_items")
+        .update({ remaining_qty: next })
+        .eq("id", target.id);
       if (updateErr) return false;
       return true;
     } catch (err) {
@@ -430,7 +488,7 @@ export default function Alerts() {
       const { error: insertErr } = await supabase.from("issues").insert(insertPayload);
       if (insertErr) throw insertErr;
 
-      let stockImpact = category === "repair_request";
+      let stockImpact = category === "repair_request" && spareIssued;
       if (isStockCategory && incidentWasherId && qty && qty > 0 && itemName.trim()) {
         stockImpact = await deductWasherStock(incidentWasherId, itemName.trim(), qty);
       }

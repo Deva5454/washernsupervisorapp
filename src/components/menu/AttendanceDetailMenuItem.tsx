@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { MenuRow } from "../MenuRow";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
+import { localDateISO } from "../../lib/date";
 import type { AttendanceRecord, AttendanceStatus, Audit, Profile } from "../../lib/types";
 
 const STATUS_LABEL: Record<AttendanceStatus, string> = {
@@ -10,11 +11,6 @@ const STATUS_LABEL: Record<AttendanceStatus, string> = {
   late: "Late",
   week_off: "Week Off",
 };
-
-function isoDate(d: Date) {
-  const offset = d.getTimezoneOffset();
-  return new Date(d.getTime() - offset * 60000).toISOString().slice(0, 10);
-}
 
 function daysAgo(dateStr: string) {
   const then = new Date(dateStr).getTime();
@@ -29,7 +25,7 @@ function AttendanceDetailPanel() {
   const [rosterLoading, setRosterLoading] = useState(true);
 
   const [washerId, setWasherId] = useState("");
-  const [date, setDate] = useState(isoDate(new Date()));
+  const [date, setDate] = useState(localDateISO());
   const [attendance, setAttendance] = useState<AttendanceRecord | null>(null);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [attendanceError, setAttendanceError] = useState<string | null>(null);

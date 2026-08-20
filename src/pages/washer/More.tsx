@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { ChevronDown, ChevronUp, Siren } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabase";
+import { localDateISO } from "../../lib/date";
 import { GRADE_LABEL, GRADE_PILL } from "../../lib/audit";
 import { LeaveMenuItem } from "../../components/menu/LeaveMenuItem";
 import { AdvanceMenuItem } from "../../components/menu/AdvanceMenuItem";
@@ -64,23 +65,28 @@ function MenuRow({
 
 type MonthView = "current" | "previous";
 
-function toDateStr(d: Date) {
-  return d.toISOString().slice(0, 10);
-}
-
 // Calendar-month range, not a rolling window: "current" is the 1st of this
 // month through today, "previous" is the 1st through the last day of last
 // month — matching how attendance is actually reviewed (by month), rather
 // than an arbitrary trailing-30-days slice.
+//
+// Every boundary is formatted with localDateISO(), not a bare
+// `.toISOString().slice(0, 10)`: these Date objects (start/end/now) all
+// represent local midnight or the local "now" moment, and formatting them
+// via plain toISOString() reads back the UTC calendar date — which in IST
+// (UTC+5:30) is one day earlier than the local date the Date object was
+// actually constructed to represent. That's the same "today" bug as
+// elsewhere, just applied to month-boundary dates instead of only to
+// `new Date()` directly.
 function monthRange(view: MonthView) {
   const now = new Date();
   if (view === "current") {
     const start = new Date(now.getFullYear(), now.getMonth(), 1);
-    return { start: toDateStr(start), end: toDateStr(now), label: now.toLocaleDateString("en-IN", { month: "long", year: "numeric" }) };
+    return { start: localDateISO(start), end: localDateISO(now), label: now.toLocaleDateString("en-IN", { month: "long", year: "numeric" }) };
   }
   const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const end = new Date(now.getFullYear(), now.getMonth(), 0);
-  return { start: toDateStr(start), end: toDateStr(end), label: start.toLocaleDateString("en-IN", { month: "long", year: "numeric" }) };
+  return { start: localDateISO(start), end: localDateISO(end), label: start.toLocaleDateString("en-IN", { month: "long", year: "numeric" }) };
 }
 
 function AttendanceHistory({ washerId }: { washerId: string }) {
@@ -280,7 +286,7 @@ function RequestCover({ washerId }: { washerId: string }) {
           type="date"
           value={date}
           onChange={(e) => setDate(e.target.value)}
-          min={new Date().toISOString().slice(0, 10)}
+          min={localDateISO()}
           className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-600"
         />
         <input
@@ -459,7 +465,7 @@ function HelpSupport() {
   const faqs = [
     {
       q: "How do I check in for the day?",
-      a: "On the Home tab, tap Check In, take a selfie, and confirm your location. If GPS is turned off partway through your shift, you'll be checked out automatically and locked out until your supervisor unlocks check-in.",
+      a: "On the Home tab, tap Check In, take a selfie, and confirm your location. If GPS is turned off partway through your shift, you'll be locked out of the app until your supervisor unlocks check-in — this doesn't check you out automatically, so tell your supervisor right away if it happens.",
     },
     {
       q: "How do I start a job?",

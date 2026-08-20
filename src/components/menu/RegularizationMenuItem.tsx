@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { MenuRow } from "../MenuRow";
 import { supabase } from "../../lib/supabase";
+import { localDateISO } from "../../lib/date";
 import type { AttendanceStatus, RegularizationRequest } from "../../lib/types";
 
 const STATUS_LABEL: Record<AttendanceStatus, string> = {
@@ -80,7 +81,7 @@ function RegularizationPanel({ profileId }: { profileId: string }) {
           type="date"
           value={targetDate}
           onChange={(e) => setTargetDate(e.target.value)}
-          max={new Date().toISOString().slice(0, 10)}
+          max={localDateISO()}
           className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm bg-white"
         />
         <select

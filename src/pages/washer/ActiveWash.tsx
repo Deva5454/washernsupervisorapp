@@ -136,7 +136,7 @@ export default function ActiveWash() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [advancing, setAdvancing] = useState(false);
-  const [uploadingKey, setUploadingKey] = useState<string | null>(null);
+  const [uploadingKeys, setUploadingKeys] = useState<Set<string>>(new Set());
   const [showBeforePhotos, setShowBeforePhotos] = useState(false);
 
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(null);
@@ -205,7 +205,7 @@ export default function ActiveWash() {
   async function capturePhoto(phase: PhotoPhase, direction: PhotoDirection, file: File) {
     if (!job) return;
     const key = `${phase}-${direction}`;
-    setUploadingKey(key);
+    setUploadingKeys((prev) => new Set(prev).add(key));
     setError(null);
     try {
       const url = await uploadPhoto(file, `jobs/${job.id}`);
@@ -223,7 +223,11 @@ export default function ActiveWash() {
       console.error(err);
       setError("Photo upload failed. Please try again.");
     } finally {
-      setUploadingKey(null);
+      setUploadingKeys((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
     }
   }
 
@@ -237,6 +241,7 @@ export default function ActiveWash() {
         .select("id, remaining_qty")
         .eq("washer_id", washerId)
         .ilike("material_name", "%cloth%")
+        .order("material_name", { ascending: true })
         .limit(1)
         .maybeSingle();
       if (error || !data) return;
@@ -593,7 +598,7 @@ export default function ActiveWash() {
                   key={direction}
                   label={DIRECTION_LABEL[direction]}
                   photo={photoFor("after", direction)}
-                  uploading={uploadingKey === `after-${direction}`}
+                  uploading={uploadingKeys.has(`after-${direction}`)}
                   onCapture={(file) => capturePhoto("after", direction, file)}
                 />
               ))}
@@ -618,7 +623,7 @@ export default function ActiveWash() {
                     key={direction}
                     label={DIRECTION_LABEL[direction]}
                     photo={photoFor("before", direction)}
-                    uploading={uploadingKey === `before-${direction}`}
+                    uploading={uploadingKeys.has(`before-${direction}`)}
                     onCapture={(file) => capturePhoto("before", direction, file)}
                   />
                 ))}
@@ -631,10 +636,10 @@ export default function ActiveWash() {
               <p className="text-xs font-bold text-gray-900 uppercase tracking-wide">
                 Collect Payment
               </p>
-              {job.payment_collected_at ? (
+              {job.payment_method && job.payment_collected_at ? (
                 <p className="flex items-center gap-2 text-sm font-bold text-green-700">
                   <Check className="h-4 w-4" />
-                  {PAYMENT_METHOD_LABEL[job.payment_method!]} collected
+                  {PAYMENT_METHOD_LABEL[job.payment_method]} collected
                   {job.payment_amount ? ` · ₹${job.payment_amount}` : ""}
                 </p>
               ) : (

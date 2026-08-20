@@ -4,7 +4,7 @@ import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
 import { notify } from "../../lib/notify";
 import { CheckInPanel } from "../../components/CheckInPanel";
-import type { AttendanceRecord, AttendanceStatus, CashDeposit, Job, Profile } from "../../lib/types";
+import type { AttendanceRecord, AttendanceStatus, CashDeposit, Job, Profile, SchedulePause } from "../../lib/types";
 
 function todayCashCollected(jobs: Job[], washerId: string) {
   return jobs
@@ -48,6 +48,7 @@ export default function Dashboard() {
   const { profile } = useAuth();
 
   const [roster, setRoster] = useState<Profile[]>([]);
+  const [pausedWasherIds, setPausedWasherIds] = useState<Set<string>>(new Set());
   const [attendanceToday, setAttendanceToday] = useState<AttendanceRecord[]>([]);
   const [teamJobsToday, setTeamJobsToday] = useState<Job[]>([]);
   const [unassignedJobs, setUnassignedJobs] = useState<Job[]>([]);
@@ -116,21 +117,25 @@ export default function Dashboard() {
       setUnassignedJobs((unassignedRes.data as Job[]) ?? []);
 
       if (washerIds.length) {
-        const [issueRes, depositRes] = await Promise.all([
+        const [issueRes, depositRes, pauseRes] = await Promise.all([
           supabase
             .from("issues")
             .select("id", { count: "exact", head: true })
             .eq("status", "open")
             .in("reported_by", washerIds),
           supabase.from("cash_deposits").select("*").eq("deposit_date", today).in("washer_id", washerIds),
+          supabase.from("schedule_pauses").select("*").is("resumed_at", null).in("washer_id", washerIds),
         ]);
         if (issueRes.error) throw issueRes.error;
         if (depositRes.error) throw depositRes.error;
+        if (pauseRes.error) throw pauseRes.error;
         setOpenIssueCount(issueRes.count ?? 0);
         setCashDepositsToday((depositRes.data as CashDeposit[]) ?? []);
+        setPausedWasherIds(new Set(((pauseRes.data as SchedulePause[]) ?? []).map((p) => p.washer_id)));
       } else {
         setOpenIssueCount(0);
         setCashDepositsToday([]);
+        setPausedWasherIds(new Set());
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load dashboard data.");
@@ -194,6 +199,7 @@ export default function Dashboard() {
   function onDutyWashers(excludeWasherId: string) {
     return roster.filter((w) => {
       if (w.id === excludeWasherId) return false;
+      if (pausedWasherIds.has(w.id)) return false;
       const status = attendanceByWasher.get(w.id)?.status;
       return status === "present" || status === "late";
     });
@@ -468,11 +474,14 @@ export default function Dashboard() {
                           className="flex-1 rounded-xl border border-gray-300 px-3 py-2 text-sm bg-white"
                         >
                           <option value="">Select washer…</option>
-                          {roster.map((w) => (
-                            <option key={w.id} value={w.id}>
-                              {w.full_name}
-                            </option>
-                          ))}
+                          {roster
+                            .filter((w) => !pausedWasherIds.has(w.id) || w.id === job.washer_id)
+                            .map((w) => (
+                              <option key={w.id} value={w.id}>
+                                {w.full_name}
+                                {pausedWasherIds.has(w.id) ? " (Paused)" : ""}
+                              </option>
+                            ))}
                         </select>
                         <button
                           onClick={() => confirmAssign(job.id)}
@@ -530,6 +539,11 @@ export default function Dashboard() {
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0">
                       <p className="font-bold text-gray-900 truncate">{w.full_name}</p>
+                      {pausedWasherIds.has(w.id) && (
+                        <span className="flex-shrink-0 text-xs font-bold text-amber-700 bg-amber-100 rounded-full px-2 py-0.5">
+                          Paused
+                        </span>
+                      )}
                       {w.phone && (
                         <a
                           href={`tel:${w.phone}`}

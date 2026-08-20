@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Check } from "lucide-react";
 import { MenuRow } from "../MenuRow";
 import { supabase } from "../../lib/supabase";
+import { localDateISO } from "../../lib/date";
 import type { DailyFlowProgress } from "../../lib/types";
 
 const STEPS = [
@@ -13,11 +14,6 @@ const STEPS = [
   { key: "eod_attendance_closed", label: "End-of-Day Attendance Closed", critical: true },
   { key: "cash_register_submitted", label: "Cash Register Submitted", critical: true },
 ] as const;
-
-function isoDate(d: Date) {
-  const offset = d.getTimezoneOffset();
-  return new Date(d.getTime() - offset * 60000).toISOString().slice(0, 10);
-}
 
 function DailyFlowPanel({ profileId }: { profileId: string }) {
   const [progress, setProgress] = useState<DailyFlowProgress | null>(null);
@@ -34,7 +30,7 @@ function DailyFlowPanel({ profileId }: { profileId: string }) {
     setLoading(true);
     setLoadError(null);
     try {
-      const today = isoDate(new Date());
+      const today = localDateISO();
       const { data, error } = await supabase
         .from("daily_flow_progress")
         .select("*")

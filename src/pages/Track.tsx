@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { localDateISO } from "../lib/date";
 import type { AttendanceRecord, ExecutionStage, Job } from "../lib/types";
 
 const STAGES: { key: ExecutionStage; label: string }[] = [
@@ -59,7 +60,7 @@ export default function Track() {
       const loadedJob = data as Job;
       setJob(loadedJob);
       if (loadedJob.washer_id) {
-        const today = new Date().toISOString().slice(0, 10);
+        const today = localDateISO();
         const { data: attData } = await supabase
           .from("attendance")
           .select("*")

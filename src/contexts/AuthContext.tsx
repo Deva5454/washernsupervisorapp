@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { supabase } from "../lib/supabase";
+import { localDateISO } from "../lib/date";
 import type { AttendanceRecord, Profile, Role } from "../lib/types";
 
 // No-login mode: there is no sign-in step at all. The app picks whichever
@@ -41,10 +42,6 @@ function initialRole(): Role {
   return stored === "supervisor" ? "supervisor" : "washer";
 }
 
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
-}
-
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [role, setRole] = useState<Role>(initialRole);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -84,7 +81,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .from("attendance")
       .select("*")
       .eq("washer_id", profileId)
-      .eq("date", todayISO())
+      .eq("date", localDateISO())
       .maybeSingle();
     setTodayAttendance((data as AttendanceRecord) ?? null);
   }

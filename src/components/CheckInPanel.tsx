@@ -3,6 +3,7 @@ import { Camera, Check, MapPin } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { supabase } from "../lib/supabase";
 import { uploadPhoto } from "../lib/uploadPhoto";
+import { localDateISO } from "../lib/date";
 
 /**
  * Punch in / punch out, shared by both Washer Home and Supervisor
@@ -69,7 +70,7 @@ export function CheckInPanel() {
     setError(null);
     try {
       const selfieUrl = await uploadPhoto(selfieFile, `attendance/${profile.id}`);
-      const today = new Date().toISOString().slice(0, 10);
+      const today = localDateISO();
       // Upsert, not insert: attendance has one row per person per day, so
       // re-checking in later the same day (e.g. after a GPS-loss
       // auto-logout) updates that same row rather than violating the

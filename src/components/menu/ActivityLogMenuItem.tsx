@@ -87,11 +87,6 @@ function ActivityLogPanel() {
               </div>
               <p className="text-sm font-bold text-gray-900">{entry.action}</p>
               {entry.details && <p className="text-sm text-gray-600">{entry.details}</p>}
-              {entry.gps_verified && (
-                <span className="inline-block text-xs font-bold text-green-700 bg-green-100 rounded-full px-2 py-0.5">
-                  GPS ✓
-                </span>
-              )}
             </div>
           ))}
         </div>
